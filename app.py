@@ -2,51 +2,69 @@ import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
 from io import StringIO
 import re
+import datetime
+import time
+import concurrent.futures
 
-st.set_page_config(layout="wide", page_title="Options Flow Tracker", page_icon="📈")
+# ==========================================
+# ดึง Token จาก Streamlit Secrets
+# ==========================================
+try:
+    GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"]
+except:
+    GITHUB_TOKEN = ""
+# ==========================================
+
+st.set_page_config(layout="wide", page_title="Vol2Vol Gold Data Tracker", page_icon="📈")
 
 # --- Custom CSS ---
 st.markdown("""
 <style>
-    /* ลดช่องว่างด้านบนสุดของหน้าเว็บ */
     .block-container {
-        padding-top: 2rem !important;
+        padding-top: 3rem !important;
         padding-bottom: 1rem !important;
     }
-    
-    .header-box { background-color: #1E1E1E; padding: 15px; border-radius: 8px; margin-bottom: 20px; text-align: center; border: 1px solid #333; }
-    .header-title { font-size: 20px; font-weight: bold; color: #E2E8F0; margin-bottom: 10px; }
+    .header-box { 
+        background-color: var(--secondary-background-color); 
+        color: var(--text-color) !important; 
+        padding: 15px; 
+        border-radius: 8px; 
+        margin-bottom: 20px; 
+        text-align: center; 
+        border: 1px solid var(--border-color); 
+    }
+    .header-title { font-size: 20px; font-weight: bold; color: var(--text-color); margin-bottom: 10px; }
     .header-metrics span { font-size: 16px; margin: 0 15px; font-weight: bold; }
     .t-put { color: #F59E0B; }
     .t-call { color: #3B82F6; }
     .t-vol { color: #EF4444; }
-    .t-neutral { color: #A0AEC0; }
-    
-    /* ป้องกันการ Drag ลากข้อความใน Dropdown */
+    .t-neutral { color: #718096; } 
     div[data-baseweb="select"] {
         user-select: none;
         -webkit-user-select: none;
         -ms-user-select: none;
+        cursor: pointer !important;
     }
+    div[data-baseweb="select"] * { cursor: pointer !important; }
+    div[data-baseweb="select"] input { caret-color: transparent !important; }
 </style>
 """, unsafe_allow_html=True)
 
 REPO = "pageth/Vol2VolData"
 
-# ฟังก์ชันตัวช่วยดึงราคา Underlying (ATM) จาก Header
 def extract_atm(header_text):
     match = re.search(r'vs\s+([\d\.,]+)', str(header_text))
     if match:
         return float(match.group(1).replace(',', ''))
     return None
 
-# ฟังก์ชันตัวช่วยสร้างกล่อง Header
 def get_styled_header(h1_text, h2_text):
     h2_styled = h2_text.replace("Put:", "<span class='t-put'>Put:</span>")\
                        .replace("Call:", "<span class='t-call'>Call:</span>")\
@@ -60,33 +78,50 @@ def get_styled_header(h1_text, h2_text):
     </div>
     """
 
-# ฟังก์ชันดึงข้อมูล (ปรับ max_commits เป็น 1000)
-@st.cache_data(ttl=300) 
-def fetch_github_history(file_path, max_commits=1000):
-    api_url = f"https://api.github.com/repos/{REPO}/commits?path={file_path}"
+@st.cache_data(show_spinner=False) 
+def fetch_github_history(file_path, max_commits=200): 
     headers = {'User-Agent': 'Mozilla/5.0'}
-    
-    try:
-        response = requests.get(api_url, headers=headers, timeout=10)
-    except Exception: return pd.DataFrame()
-    if response.status_code != 200: return pd.DataFrame()
+    if GITHUB_TOKEN.strip():
+        headers['Authorization'] = f'token {GITHUB_TOKEN.strip()}'
         
-    commits = response.json()
-    if not commits: return pd.DataFrame()
-        
-    all_data = []
     today_date = pd.Timestamp.now(tz='Asia/Bangkok').date()
+    per_page = 100
+    pages_to_fetch = (max_commits // per_page) + (1 if max_commits % per_page > 0 else 0)
     
-    for commit in commits[:max_commits]:
-        sha = commit['sha']
-        date_str = commit['commit']['author']['date'] 
-        dt = pd.to_datetime(date_str).tz_convert('Asia/Bangkok') if pd.to_datetime(date_str).tzinfo else pd.to_datetime(date_str).tz_localize('UTC').tz_convert('Asia/Bangkok')
+    commit_metadata = []
+    keep_fetching = True
+    
+    for page in range(1, pages_to_fetch + 1):
+        if not keep_fetching: break
+        api_url = f"https://api.github.com/repos/{REPO}/commits?path={file_path}&per_page={per_page}&page={page}"
         
-        if dt.date() != today_date: break
+        try:
+            response = requests.get(api_url, headers=headers, timeout=10)
+        except Exception: break
             
-        time_label = dt.strftime("%H:%M:%S")
+        if response.status_code != 200: break
+        commits = response.json()
+        if not commits: break
+            
+        for commit in commits:
+            sha = commit['sha']
+            date_str = commit['commit']['author']['date'] 
+            dt = pd.to_datetime(date_str).tz_convert('Asia/Bangkok') if pd.to_datetime(date_str).tzinfo else pd.to_datetime(date_str).tz_localize('UTC').tz_convert('Asia/Bangkok')
+            
+            if dt.date() != today_date: 
+                keep_fetching = False
+                break
+                
+            time_label = dt.strftime("%H:%M:%S")
+            commit_metadata.append((sha, time_label, dt))
+            
+            if len(commit_metadata) >= max_commits:
+                keep_fetching = False
+                break
+
+    def download_file(meta):
+        sha, time_label, dt = meta
         raw_url = f"https://raw.githubusercontent.com/{REPO}/{sha}/{file_path}"
-        
         try:
             raw_response = requests.get(raw_url, headers=headers, timeout=10)
             if raw_response.status_code == 200:
@@ -100,86 +135,149 @@ def fetch_github_history(file_path, max_commits=1000):
                 df['Datetime'] = dt
                 df['Header1'] = h1
                 df['Header2'] = h2
-                all_data.append(df)
-        except Exception: continue
-            
+                return df
+        except Exception:
+            pass
+        return None
+
+    all_data = []
+    if commit_metadata:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+            results = executor.map(download_file, commit_metadata)
+            for res in results:
+                if res is not None:
+                    all_data.append(res)
+
     if all_data:
-        combined_df = pd.concat(all_data, ignore_index=True)
-        return combined_df
+        return pd.concat(all_data, ignore_index=True)
     return pd.DataFrame()
 
-# โหลดข้อมูล (ดึง Intraday 1000 commits)
-with st.spinner("กำลังซิงค์ข้อมูลล่าสุด..."):
-    df_intraday = fetch_github_history("IntradayData.txt", max_commits=1000)
-    df_oi = fetch_github_history("OIData.txt", max_commits=1)
+# Initialize session state สำหรับระบบ Play/Pause และ Focus
+if 'is_playing' not in st.session_state:
+    st.session_state.is_playing = False
+if 'anim_idx' not in st.session_state:
+    st.session_state.anim_idx = 0
+if 'focus_slider' not in st.session_state:
+    st.session_state.focus_slider = False
+
+col_spin, col_dropdown, col_refresh = st.columns([7, 2, 1.5])
+
+with col_dropdown:
+    chart_mode = st.selectbox("โหมดแสดงกราฟ", ["Call / Put Vol", "Total Vol"], label_visibility="collapsed")
+    
+with col_refresh:
+    if st.button(":material/refresh: Refresh Data", use_container_width=True):
+        st.cache_data.clear() 
+        if 'selected_time_state' in st.session_state:
+            del st.session_state['selected_time_state']
+        st.session_state.is_playing = False
+        st.rerun()
+
+with col_spin:
+    with st.spinner("Refresh data..."):
+        df_intraday = fetch_github_history("IntradayData.txt", max_commits=200)
+        df_oi = fetch_github_history("OIData.txt", max_commits=1)
+
+if not df_intraday.empty:
+    df_intraday = df_intraday[~df_intraday['Header1'].str.contains("Open Interest", case=False, na=False)]
+    cutoff_time = datetime.time(12, 30, 0)
+    df_intraday = df_intraday[df_intraday['Datetime'].dt.time >= cutoff_time]
 
 if not df_intraday.empty:
     df_intraday = df_intraday.sort_values('Datetime', ascending=True)
     available_times = df_intraday['Time'].unique()
-    
-    # ดึงค่า Dropdown ก่อน เพื่อให้ Layout ขนานกับ Tab ได้ดีขึ้น
-    col1, col2 = st.columns([5, 1])
-    with col2:
-        st.markdown("<div style='margin-bottom: -15px;'></div>", unsafe_allow_html=True) # ปรับลดช่องว่าง
-        chart_mode = st.selectbox("โหมดแสดงกราฟ", ["แยก Call / Put", "รวมยอด (Total)"], label_visibility="collapsed")
         
-    # เลือก Time เริ่มต้นเป็นข้อมูลล่าสุด
-    if 'selected_time_state' not in st.session_state:
+    if 'selected_time_state' not in st.session_state or st.session_state.selected_time_state not in available_times:
         st.session_state.selected_time_state = available_times[-1]
 
-    current_data = df_intraday[df_intraday['Time'] == st.session_state.selected_time_state].copy().sort_values('Strike')
-    if current_data['Vol Settle'].max() < 1:
-        current_data['Vol Settle'] = (current_data['Vol Settle'] * 100).round(2)
-        
-    tab1, tab2 = st.tabs(["📈 Intraday Volume", "🏦 Open Interest (OI)"])
+    if st.session_state.is_playing:
+        if 'anim_idx' in st.session_state and st.session_state.anim_idx < len(available_times):
+            st.session_state.selected_time_state = available_times[st.session_state.anim_idx]
+
+    tab1, tab2 = st.tabs([":material/show_chart: Intraday Volume", ":material/account_balance: Open Interest (OI)"])
     
-    # =============== TAB 1: Intraday ===============
     with tab1:
-        h1_intra = current_data['Header1'].iloc[0]
-        h2_intra = current_data['Header2'].iloc[0]
-        atm_intra = extract_atm(h1_intra)
+        st.markdown("<br>", unsafe_allow_html=True)
         
+        time_val = st.session_state.selected_time_state
+        frame_data = df_intraday[df_intraday['Time'] == time_val].copy().sort_values('Strike')
+        if frame_data['Vol Settle'].max() < 1:
+            frame_data['Vol Settle'] = (frame_data['Vol Settle'] * 100).round(2)
+            
+        h1_intra = frame_data['Header1'].iloc[0]
+        h2_intra = frame_data['Header2'].iloc[0]
         st.markdown(get_styled_header(h1_intra, h2_intra), unsafe_allow_html=True)
         
         fig_intra = make_subplots(specs=[[{"secondary_y": True}]])
-        
-        if chart_mode == "แยก Call / Put":
-            fig_intra.add_trace(go.Bar(x=current_data['Strike'], y=current_data['Put'], name='Put Vol', marker=dict(color='rgba(245, 158, 11, 0.85)', line=dict(color='#F59E0B', width=1))), secondary_y=False)
-            fig_intra.add_trace(go.Bar(x=current_data['Strike'], y=current_data['Call'], name='Call Vol', marker=dict(color='rgba(59, 130, 246, 0.85)', line=dict(color='#3B82F6', width=1))), secondary_y=False)
+        if chart_mode == "Call / Put Vol":
+            fig_intra.add_trace(go.Bar(x=frame_data['Strike'], y=frame_data['Put'], name='Put Vol', marker=dict(color='rgba(245, 158, 11, 0.85)', line=dict(color='#F59E0B', width=1))), secondary_y=False)
+            fig_intra.add_trace(go.Bar(x=frame_data['Strike'], y=frame_data['Call'], name='Call Vol', marker=dict(color='rgba(59, 130, 246, 0.85)', line=dict(color='#3B82F6', width=1))), secondary_y=False)
         else:
-            total_vol = current_data['Call'] + current_data['Put']
-            fig_intra.add_trace(go.Bar(x=current_data['Strike'], y=total_vol, name='Total Vol', marker=dict(color='rgba(16, 185, 129, 0.85)', line=dict(color='#10B981', width=1))), secondary_y=False)
+            total_vol = frame_data['Call'] + frame_data['Put']
+            fig_intra.add_trace(go.Bar(x=frame_data['Strike'], y=total_vol, name='Total Vol', marker=dict(color='rgba(16, 185, 129, 0.85)', line=dict(color='#10B981', width=1))), secondary_y=False)
 
-        fig_intra.add_trace(go.Scatter(x=current_data['Strike'], y=current_data['Vol Settle'], name='Vol Settle', mode='lines+markers', line=dict(color='#EF4444', width=3, shape='spline'), marker=dict(size=6, color='#EF4444')), secondary_y=True)
+        fig_intra.add_trace(go.Scatter(x=frame_data['Strike'], y=frame_data['Vol Settle'], name='Vol Settle', mode='lines+markers', line=dict(color='#EF4444', width=3, shape='spline'), marker=dict(size=6, color='#EF4444')), secondary_y=True)
         
+        atm_intra = extract_atm(h1_intra)
         if atm_intra:
-            fig_intra.add_vline(x=atm_intra, line_dash="dash", line_color="white", opacity=0.6, annotation_text="ATM", annotation_position="top")
+            fig_intra.add_vline(x=atm_intra, line_dash="dash", line_color="#888888", opacity=0.8, annotation_text="ATM", annotation_position="top")
             
         fig_intra.update_layout(barmode='group', bargap=0.15, height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5), margin=dict(l=10, r=10, t=10, b=10))
-        fig_intra.update_xaxes(title_text="Strike Price", showgrid=True, gridcolor='rgba(255,255,255,0.05)')
-        fig_intra.update_yaxes(title_text="Volume", secondary_y=False, showgrid=True, gridcolor='rgba(255,255,255,0.05)')
+        fig_intra.update_xaxes(title_text="Strike Price", showgrid=True, gridcolor='rgba(128,128,128,0.2)')
+        fig_intra.update_yaxes(title_text="Volume", secondary_y=False, showgrid=True, gridcolor='rgba(128,128,128,0.2)')
         fig_intra.update_yaxes(title_text="Volatility", secondary_y=True, showgrid=False)
         st.plotly_chart(fig_intra, use_container_width=True)
-
-        # ---------------------------------------------------------
-        # แถบ Timeline (ย้ายมาอยู่ใต้กราฟ)
-        # ---------------------------------------------------------
+        
         st.markdown("<br>", unsafe_allow_html=True)
-        selected_time = st.select_slider(
-            "Timeline", 
-            options=available_times, 
-            value=st.session_state.selected_time_state,
-            label_visibility="collapsed",
-            key="timeline_slider_intra"
-        )
-        if selected_time != st.session_state.selected_time_state:
-            st.session_state.selected_time_state = selected_time
-            st.rerun()
+        col_play, col_slider = st.columns([1, 10])
+        
+        with col_play:
+            if st.session_state.is_playing:
+                if st.button(":material/pause: Pause", use_container_width=True):
+                    st.session_state.is_playing = False
+                    st.session_state.focus_slider = True  # สั่งให้ Focus ที่ Slider ตอน Pause
+                    st.rerun()
+            else:
+                if st.button(":material/play_arrow: Play", use_container_width=True):
+                    st.session_state.is_playing = True
+                    current_idx = list(available_times).index(st.session_state.selected_time_state)
+                    if current_idx == len(available_times) - 1:
+                        st.session_state.anim_idx = 0
+                    else:
+                        st.session_state.anim_idx = current_idx
+                    
+                    st.session_state.selected_time_state = available_times[st.session_state.anim_idx]
+                    st.rerun()
+                    
+        with col_slider:
+            st.select_slider(
+                "Timeline", 
+                options=available_times, 
+                key="selected_time_state", 
+                label_visibility="collapsed"
+            )
 
-        # ตารางข้อมูลของ Intraday
+        # ------ JavaScript สำหรับดึง Focus ไปที่ปุ่มกลมของ Slider ------
+        if st.session_state.focus_slider:
+            components.html(
+                """
+                <script>
+                    const sliders = window.parent.document.querySelectorAll('div[role="slider"]');
+                    if (sliders.length > 0) {
+                        sliders[0].focus();
+                    }
+                </script>
+                """,
+                height=0,
+                width=0,
+            )
+            st.session_state.focus_slider = False
+        # ---------------------------------------------------------------
+
         st.markdown("---")
-        st.markdown("### 📊 Intraday Volume Data")
-        table_df_intra = current_data[['Strike', 'Call', 'Put', 'Vol Settle']].copy()
+        st.markdown("### :material/analytics: Intraday Volume Data")
+        
+        table_df_intra = frame_data[['Strike', 'Call', 'Put', 'Vol Settle']].copy()
         table_df_intra['Total Vol'] = table_df_intra['Call'] + table_df_intra['Put']
         table_df_intra = table_df_intra[['Strike', 'Call', 'Put', 'Total Vol', 'Vol Settle']] 
         
@@ -192,8 +290,17 @@ if not df_intraday.empty:
                 "Total Vol": st.column_config.ProgressColumn("Total Vol", format="%d", min_value=0, max_value=int(table_df_intra['Total Vol'].max()) if not table_df_intra.empty else 100),
                 "Vol Settle": st.column_config.NumberColumn("Vol Settle", format="%.2f"),
             },
-            hide_index=True, use_container_width=True, height=800 # ปรับความสูงเพิ่มเป็น 800
+            hide_index=True, use_container_width=True, height=800
         )
+
+        if st.session_state.is_playing:
+            time.sleep(0.6)
+            st.session_state.anim_idx += 1
+            if st.session_state.anim_idx < len(available_times):
+                st.rerun()
+            else:
+                st.session_state.is_playing = False
+                st.rerun()
 
     # =============== TAB 2: OI ===============
     with tab2:
@@ -210,7 +317,7 @@ if not df_intraday.empty:
                 
             fig_oi = make_subplots(specs=[[{"secondary_y": True}]])
             
-            if chart_mode == "แยก Call / Put":
+            if chart_mode == "Call / Put Vol":
                 fig_oi.add_trace(go.Bar(x=latest_oi['Strike'], y=latest_oi['Put'], name='Put OI', marker=dict(color='rgba(245, 158, 11, 0.85)', line=dict(color='#F59E0B', width=1))), secondary_y=False)
                 fig_oi.add_trace(go.Bar(x=latest_oi['Strike'], y=latest_oi['Call'], name='Call OI', marker=dict(color='rgba(59, 130, 246, 0.85)', line=dict(color='#3B82F6', width=1))), secondary_y=False)
             else:
@@ -220,17 +327,16 @@ if not df_intraday.empty:
             fig_oi.add_trace(go.Scatter(x=latest_oi['Strike'], y=latest_oi['Vol Settle'], name='Vol Settle', mode='lines+markers', line=dict(color='#EF4444', width=3, shape='spline'), marker=dict(size=6, color='#EF4444')), secondary_y=True)
             
             if atm_oi:
-                fig_oi.add_vline(x=atm_oi, line_dash="dash", line_color="white", opacity=0.6, annotation_text="ATM", annotation_position="top")
+                fig_oi.add_vline(x=atm_oi, line_dash="dash", line_color="#888888", opacity=0.8, annotation_text="ATM", annotation_position="top")
                 
             fig_oi.update_layout(barmode='group', bargap=0.15, height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5), margin=dict(l=10, r=10, t=10, b=10))
-            fig_oi.update_xaxes(title_text="Strike Price", showgrid=True, gridcolor='rgba(255,255,255,0.05)')
-            fig_oi.update_yaxes(title_text="Open Interest", secondary_y=False, showgrid=True, gridcolor='rgba(255,255,255,0.05)')
+            fig_oi.update_xaxes(title_text="Strike Price", showgrid=True, gridcolor='rgba(128,128,128,0.2)')
+            fig_oi.update_yaxes(title_text="Open Interest", secondary_y=False, showgrid=True, gridcolor='rgba(128,128,128,0.2)')
             fig_oi.update_yaxes(title_text="Volatility", secondary_y=True, showgrid=False)
             st.plotly_chart(fig_oi, use_container_width=True)
 
-            # ตารางข้อมูลของ OI
             st.markdown("---")
-            st.markdown("### 📊 OI Volume Data")
+            st.markdown("### :material/analytics: OI Volume Data")
             table_df_oi = latest_oi[['Strike', 'Call', 'Put', 'Vol Settle']].copy()
             table_df_oi['Total Vol'] = table_df_oi['Call'] + table_df_oi['Put']
             table_df_oi = table_df_oi[['Strike', 'Call', 'Put', 'Total Vol', 'Vol Settle']] 
@@ -244,8 +350,8 @@ if not df_intraday.empty:
                     "Total Vol": st.column_config.ProgressColumn("Total Vol", format="%d", min_value=0, max_value=int(table_df_oi['Total Vol'].max()) if not table_df_oi.empty else 100),
                     "Vol Settle": st.column_config.NumberColumn("Vol Settle", format="%.2f"),
                 },
-                hide_index=True, use_container_width=True, height=800 # ปรับความสูงเพิ่มเป็น 800
+                hide_index=True, use_container_width=True, height=800
             )
 
 else:
-    st.info("💡 รอการอัปเดตข้อมูลของ 'วันนี้' จากระบบของคุณครับ")
+    st.info("รอการอัปเดตข้อมูลของ 'วันนี้' ตั้งแต่เวลา 12:30 น. เป็นต้นไปครับ (กดปุ่ม Refresh ด้านบนขวาเพื่อรีเฟรชข้อมูล)", icon=":material/lightbulb:")
