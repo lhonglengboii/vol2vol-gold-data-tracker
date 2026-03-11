@@ -78,7 +78,7 @@ def get_styled_header(h1_text, h2_text):
     </div>
     """
 
-@st.cache_data(show_spinner=False, ttl=420)
+@st.cache_data(show_spinner=False, ttl=120)
 def fetch_github_history(file_path, max_commits=200): 
     headers = {'User-Agent': 'Mozilla/5.0'}
     if GITHUB_TOKEN.strip():
