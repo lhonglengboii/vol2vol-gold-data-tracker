@@ -152,13 +152,15 @@ def fetch_github_history(file_path, max_commits=200):
         return pd.concat(all_data, ignore_index=True)
     return pd.DataFrame()
 
-# Initialize session state สำหรับระบบ Play/Pause และ Focus
+# Initialize session state
 if 'is_playing' not in st.session_state:
     st.session_state.is_playing = False
 if 'anim_idx' not in st.session_state:
     st.session_state.anim_idx = 0
 if 'focus_slider' not in st.session_state:
     st.session_state.focus_slider = False
+if 'last_refresh_time' not in st.session_state:
+    st.session_state.last_refresh_time = 0
 
 col_spin, col_dropdown, col_refresh = st.columns([7, 2, 1.5])
 
@@ -166,16 +168,26 @@ with col_dropdown:
     chart_mode = st.selectbox("โหมดแสดงกราฟ", ["Call / Put Vol", "Total Vol"], label_visibility="collapsed")
     
 with col_refresh:
-    if st.button(":material/refresh: Refresh Data", use_container_width=True):
+    current_time = time.time()
+    time_passed = current_time - st.session_state.last_refresh_time
+    is_cooldown = time_passed < 120  # ถ้าน้อยกว่า 120 วินาที จะเป็น True (ติดคูลดาวน์)
+    
+    if st.button(":material/refresh: Refresh Data", disabled=is_cooldown, use_container_width=True):
+        st.session_state.last_refresh_time = current_time # บันทึกเวลาที่กด
+        st.cache_data.clear() 
         if 'selected_time_state' in st.session_state:
             del st.session_state['selected_time_state']
         st.session_state.is_playing = False
         st.rerun()
 
 with col_spin:
-    with st.spinner("Refresh data..."):
+    with st.spinner("กำลังเชื่อมต่อข้อมูล..."):
         df_intraday = fetch_github_history("IntradayData.txt", max_commits=200)
         df_oi = fetch_github_history("OIData.txt", max_commits=1)
+        
+        if not df_intraday.empty:
+            last_fetch = df_intraday['Datetime'].max().strftime("%H:%M:%S")
+            st.caption(f"⏱  ข้อมูลล่าสุดเวลา **{last_fetch}** น.")
 
 if not df_intraday.empty:
     df_intraday = df_intraday[~df_intraday['Header1'].str.contains("Open Interest", case=False, na=False)]
@@ -196,8 +208,6 @@ if not df_intraday.empty:
     tab1, tab2 = st.tabs([":material/show_chart: Intraday Volume", ":material/account_balance: Open Interest (OI)"])
     
     with tab1:
-        st.markdown("<br>", unsafe_allow_html=True)
-        
         time_val = st.session_state.selected_time_state
         frame_data = df_intraday[df_intraday['Time'] == time_val].copy().sort_values('Strike')
         if frame_data['Vol Settle'].max() < 1:
@@ -227,7 +237,6 @@ if not df_intraday.empty:
         fig_intra.update_yaxes(title_text="Volatility", secondary_y=True, showgrid=False)
         st.plotly_chart(fig_intra, use_container_width=True)
         
-        st.markdown("<br>", unsafe_allow_html=True)
         col_play, col_slider = st.columns([1, 10])
         
         with col_play:
