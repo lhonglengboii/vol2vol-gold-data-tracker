@@ -78,7 +78,7 @@ def get_styled_header(h1_text, h2_text):
     </div>
     """
 
-@st.cache_data(show_spinner=False) 
+@st.cache_data(show_spinner=False, ttl=420)
 def fetch_github_history(file_path, max_commits=200): 
     headers = {'User-Agent': 'Mozilla/5.0'}
     if GITHUB_TOKEN.strip():
@@ -142,7 +142,7 @@ def fetch_github_history(file_path, max_commits=200):
 
     all_data = []
     if commit_metadata:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             results = executor.map(download_file, commit_metadata)
             for res in results:
                 if res is not None:
@@ -167,7 +167,6 @@ with col_dropdown:
     
 with col_refresh:
     if st.button(":material/refresh: Refresh Data", use_container_width=True):
-        st.cache_data.clear() 
         if 'selected_time_state' in st.session_state:
             del st.session_state['selected_time_state']
         st.session_state.is_playing = False
