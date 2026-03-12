@@ -55,7 +55,6 @@ st.markdown("""
     }
     div[data-baseweb="select"] * { cursor: pointer !important; }
     div[data-baseweb="select"] input { caret-color: transparent !important; }
-    /* จัดการปุ่มเวลาย่อจอ */
     div[data-testid="stButton"] button {
         padding-left: 0.2rem !important;
         padding-right: 0.2rem !important;
@@ -66,11 +65,7 @@ st.markdown("""
         text-overflow: ellipsis !important;
         font-size: 0.9rem !important;
     }  
-    /* ซ่อน Toolbar ของ DataFrame (ปุ่ม Show/hide columns, Download, Search) */
-    [data-testid="stElementToolbar"] {
-        display: none !important;
-    }
-    [data-testid="stDataFrameToolbar"] {
+    [data-testid="stElementToolbar"], [data-testid="stDataFrameToolbar"] {
         display: none !important;
     }
 </style>
@@ -139,6 +134,7 @@ def show_strike_history(strike_price, df_all_time):
             use_container_width=True, 
             hide_index=True, 
             height=400,
+            column_order=["Time", "Call", "Put", "Total Vol"],
             column_config={
                 "Time": "Time",
                 "Call": "Call",
@@ -423,6 +419,7 @@ if not df_intraday.empty:
         table_df_intra = table_df_intra[['Strike', 'Call', 'Put', 'Total Vol', 'Vol Settle']] 
         st.dataframe(
             table_df_intra,
+            column_order=["Strike", "Call", "Put", "Total Vol", "Vol Settle"],
             column_config={
                 "Strike": st.column_config.NumberColumn("Strike Price", format="%d"),
                 "Call": st.column_config.ProgressColumn("Call Volume", format="%d", min_value=0, max_value=int(table_df_intra['Call'].max()) if not table_df_intra.empty else 100),
@@ -499,6 +496,7 @@ if not df_intraday.empty:
             
             st.dataframe(
                 table_df_oi,
+                column_order=["Strike", "Call", "Put", "Total Vol", "Vol Settle"],
                 column_config={
                     "Strike": st.column_config.NumberColumn("Strike Price", format="%d"),
                     "Call": st.column_config.ProgressColumn("Call Volume", format="%d", min_value=0, max_value=int(table_df_oi['Call'].max()) if not table_df_oi.empty else 100),
