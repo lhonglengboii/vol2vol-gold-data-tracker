@@ -22,7 +22,7 @@ except:
     GITHUB_TOKEN = ""
 # ==========================================
 
-st.set_page_config(layout="wide", page_title="Vol2Vol Gold Data Tracker", page_icon="📈")
+st.set_page_config(layout="wide", page_title="Vol2Vol Gold Data Tracker", page_icon=":abacus:")
 
 # --- Custom CSS ---
 st.markdown("""
