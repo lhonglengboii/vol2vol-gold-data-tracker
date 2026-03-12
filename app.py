@@ -14,17 +14,18 @@ import time
 import concurrent.futures
 
 # ==========================================
-# ดึง Token จาก Streamlit Secrets
+# Token Streamlit Secrets
 # ==========================================
 try:
     GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"]
 except:
     GITHUB_TOKEN = ""
-# ==========================================
 
 st.set_page_config(layout="wide", page_title="Vol2Vol Gold Data Tracker", page_icon=":abacus:")
 
-# --- Custom CSS ---
+# ==========================================
+# Custom CSS
+# ==========================================
 st.markdown("""
 <style>
     .block-container {
@@ -54,10 +55,99 @@ st.markdown("""
     }
     div[data-baseweb="select"] * { cursor: pointer !important; }
     div[data-baseweb="select"] input { caret-color: transparent !important; }
+    /* จัดการปุ่มเวลาย่อจอ */
+    div[data-testid="stButton"] button {
+        padding-left: 0.2rem !important;
+        padding-right: 0.2rem !important;
+    }
+    div[data-testid="stButton"] button p {
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        font-size: 0.9rem !important;
+    }  
+    /* ซ่อน Toolbar ของ DataFrame (ปุ่ม Show/hide columns, Download, Search) */
+    [data-testid="stElementToolbar"] {
+        display: none !important;
+    }
+    [data-testid="stDataFrameToolbar"] {
+        display: none !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 REPO = "pageth/Vol2VolData"
+
+# ==========================================
+# Strike Price History Popup
+# ==========================================
+@st.dialog("Strike Price History - Intraday Volume")
+def show_strike_history(strike_price, df_all_time):
+    history_df = df_all_time[df_all_time['Strike'] == strike_price].copy()
+    history_df = history_df.sort_values('Datetime')
+    
+    if not history_df.empty:
+        latest_call = int(history_df.iloc[-1]['Call'])
+        latest_put = int(history_df.iloc[-1]['Put'])
+        latest_total = latest_call + latest_put
+        
+        st.markdown(
+            f"<div style='margin-top: -15px; font-size: 22px; font-weight: bold;'>Strike: {strike_price}</div>"
+            f"<div style='font-size: 16px; margin-bottom: 15px; margin-top: 5px; color: var(--text-color);'>"
+            f"<span class='t-call'><b>Call Vol:</b> {latest_call}</span> &nbsp;&nbsp;|&nbsp;&nbsp; "
+            f"<span class='t-put'><b>Put Vol:</b> {latest_put}</span> &nbsp;&nbsp;|&nbsp;&nbsp; "
+            f"<span><b>Total Vol:</b> {latest_total}</span>"
+            f"</div>", 
+            unsafe_allow_html=True
+        )
+        
+        display_df = history_df[['Time', 'Call', 'Put']].copy()
+        display_df['Time'] = display_df['Time'] + " น." 
+        display_df['Total Vol'] = display_df['Call'] + display_df['Put']
+        
+        call_diff = display_df['Call'].diff().fillna(0).astype(int)
+        put_diff = display_df['Put'].diff().fillna(0).astype(int)
+        total_diff = display_df['Total Vol'].diff().fillna(0).astype(int)
+        
+        def format_diff(val, diff):
+            if diff > 0:
+                return f"{val} ( ▲ +{diff} )"
+            elif diff < 0:
+                return f"{val} ( ▼ {diff} )"
+            return str(val)
+            
+        display_df['Call'] = [format_diff(v, d) for v, d in zip(display_df['Call'], call_diff)]
+        display_df['Put'] = [format_diff(v, d) for v, d in zip(display_df['Put'], put_diff)]
+        display_df['Total Vol'] = [format_diff(v, d) for v, d in zip(display_df['Total Vol'], total_diff)]
+        
+        def color_bg(val):
+            if isinstance(val, str):
+                if '▲' in val:
+                    return 'background-color: rgba(16, 185, 129, 0.15); color: #10B981; font-weight: bold;'
+                elif '▼' in val:
+                    return 'background-color: rgba(239, 68, 68, 0.15); color: #EF4444; font-weight: bold;'
+            return ''
+
+        try:
+            styled_df = display_df.style.map(color_bg, subset=['Call', 'Put', 'Total Vol'])
+        except AttributeError:
+            styled_df = display_df.style.applymap(color_bg, subset=['Call', 'Put', 'Total Vol'])
+        
+        st.dataframe(
+            styled_df, 
+            use_container_width=True, 
+            hide_index=True, 
+            height=400,
+            column_config={
+                "Time": "Time",
+                "Call": "Call",
+                "Put": "Put",
+                "Total Vol": "Total"
+            }
+        )
+    else:
+        st.markdown(f"<div style='margin-top: -15px; font-size: 28px; font-weight: bold;'>Strike: {strike_price}</div>", unsafe_allow_html=True)
+        st.info("ไม่มีข้อมูลประวัติสำหรับ Strike Price นี้")
 
 def extract_atm(header_text):
     match = re.search(r'vs\s+([\d\.,]+)', str(header_text))
@@ -78,35 +168,25 @@ def get_styled_header(h1_text, h2_text):
     </div>
     """
 
-# --- ฟังก์ชันจัดการ Session Time และกรองข้อมูล (Intraday/OI) ---
 def filter_session_data(df, data_type):
     if df.empty:
         return df
-
     df['Datetime'] = pd.to_datetime(df['Datetime'])
     now = pd.Timestamp.now(tz='Asia/Bangkok')
-    
-    # หากำหนดการของ Session ปัจจุบัน
     if now.hour < 10:
         session_date = (now - timedelta(days=1)).date()
     else:
         session_date = now.date()
-
-    # ขอบเขตเวลา (10:00 น. ถึง 01:00 น. ของวันถัดไป)
     start_time = pd.Timestamp(datetime.combine(session_date, datetime.min.time())).tz_localize('Asia/Bangkok') + timedelta(hours=10)
-    end_time = start_time + timedelta(hours=15) # +15 ชม. = 01:00 น.
+    end_time = start_time + timedelta(hours=15)
 
-    # กรองประเภทจาก Header1 (Intraday จะไม่มีคำว่า Open Interest)
     if data_type == "Intraday":
         df = df[~df['Header1'].str.contains("Open Interest", case=False, na=False)]
     elif data_type == "OI":
         df = df[df['Header1'].str.contains("Open Interest", case=False, na=False)]
 
-    # กรองเวลา
     df_filtered = df[(df['Datetime'] >= start_time) & (df['Datetime'] <= end_time)]
-    # เรียงเวลาจากอดีต -> ปัจจุบัน เสมอ!
     df_filtered = df_filtered.sort_values('Datetime').reset_index(drop=True)
-    
     return df_filtered
 
 @st.cache_data(show_spinner=False, ttl=180) 
@@ -144,7 +224,6 @@ def fetch_github_history(file_path, max_commits=200):
             date_str = commit['commit']['author']['date'] 
             dt = pd.to_datetime(date_str).tz_convert('Asia/Bangkok') if pd.to_datetime(date_str).tzinfo else pd.to_datetime(date_str).tz_localize('UTC').tz_convert('Asia/Bangkok')
             
-            # ดึงข้อมูลมาตราบใดที่ยังอยู่ในหรือหลังวัน session_date
             if dt.date() < session_date: 
                 keep_fetching = False
                 break
@@ -189,7 +268,9 @@ def fetch_github_history(file_path, max_commits=200):
         return pd.concat(all_data, ignore_index=True)
     return pd.DataFrame()
 
+# ==========================================
 # Initialize session state
+# ==========================================
 if 'is_playing' not in st.session_state:
     st.session_state.is_playing = False
 if 'anim_idx' not in st.session_state:
@@ -210,30 +291,24 @@ with col_dropdown:
 
 with col_spin:
     status_placeholder = st.empty()
-    
     df_intraday = st.session_state.my_intraday_data
     df_oi = st.session_state.my_oi_data
     if not df_intraday.empty:
         last_fetch = df_intraday['Datetime'].max().strftime("%H:%M:%S")
-        status_placeholder.caption(f"⏱  ข้อมูลล่าสุดเวลา **{last_fetch}** น.")
+        status_placeholder.caption(f"⏱  ข้อมูลล่าสุดเวลา **{last_fetch} น.**")
 
 with col_refresh:
     if st.button(":material/refresh: Refresh Data", use_container_width=True):
         start_time = time.time()
-        
         with status_placeholder:
-            with st.spinner("กำลังเชื่อมต่อข้อมูล..."):
+            with st.spinner("กำลังอัปเดตข้อมูล..."):
                 raw_intra_new = fetch_github_history("IntradayData.txt", max_commits=200)
                 raw_oi_new = fetch_github_history("OIData.txt", max_commits=1)
-                
-                # --- จุดที่แก้ไขบัค! นำข้อมูลไปกรอง Session Date & เรียงเวลาก่อนยัดใส่ State ---
                 st.session_state.my_intraday_data = filter_session_data(raw_intra_new, "Intraday")
                 st.session_state.my_oi_data = filter_session_data(raw_oi_new, "OI")
-                
                 elapsed_time = time.time() - start_time
                 if elapsed_time < 3.0:
                     time.sleep(3.0 - elapsed_time)
-        
         if 'selected_time_state' in st.session_state:
             del st.session_state['selected_time_state']
         st.session_state.is_playing = False
@@ -241,7 +316,6 @@ with col_refresh:
 
 if not df_intraday.empty:
     available_times = df_intraday['Time'].unique()
-        
     if 'selected_time_state' not in st.session_state or st.session_state.selected_time_state not in available_times:
         st.session_state.selected_time_state = available_times[-1]
 
@@ -251,6 +325,9 @@ if not df_intraday.empty:
 
     tab1, tab2 = st.tabs([":material/show_chart: Intraday Volume", ":material/account_balance: Open Interest (OI)"])
     
+    # ==========================================
+    # Tab 1: Intraday Volume
+    # ==========================================
     with tab1:
         time_val = st.session_state.selected_time_state
         frame_data = df_intraday[df_intraday['Time'] == time_val].copy().sort_values('Strike')
@@ -262,27 +339,50 @@ if not df_intraday.empty:
         st.markdown(get_styled_header(h1_intra, h2_intra), unsafe_allow_html=True)
         
         fig_intra = make_subplots(specs=[[{"secondary_y": True}]])
+        total_vol = frame_data['Call'] + frame_data['Put']
+        
         if chart_mode == "Call / Put Vol":
-            fig_intra.add_trace(go.Bar(x=frame_data['Strike'], y=frame_data['Put'], name='Put Vol', marker=dict(color='rgba(245, 158, 11, 0.85)', line=dict(color='#F59E0B', width=1))), secondary_y=False)
-            fig_intra.add_trace(go.Bar(x=frame_data['Strike'], y=frame_data['Call'], name='Call Vol', marker=dict(color='rgba(59, 130, 246, 0.85)', line=dict(color='#3B82F6', width=1))), secondary_y=False)
+            fig_intra.add_trace(go.Bar(x=frame_data['Strike'], y=frame_data['Put'], name='Put Vol', 
+                marker=dict(color='rgba(245, 158, 11, 0.85)', line=dict(color='#F59E0B', width=1)),
+                hovertemplate="%{y:,.0f}",
+                selected=dict(marker=dict(opacity=0.85)), unselected=dict(marker=dict(opacity=0.85))), secondary_y=False)
+                
+            fig_intra.add_trace(go.Bar(x=frame_data['Strike'], y=frame_data['Call'], name='Call Vol', 
+                marker=dict(color='rgba(59, 130, 246, 0.85)', line=dict(color='#3B82F6', width=1)),
+                hovertemplate="%{y:,.0f}",
+                selected=dict(marker=dict(opacity=0.85)), unselected=dict(marker=dict(opacity=0.85))), secondary_y=False)
+                
+            fig_intra.add_trace(go.Scatter(x=frame_data['Strike'], y=total_vol, name='Total Vol', mode='markers', 
+                marker=dict(color='rgba(0,0,0,0)', size=1), showlegend=False,
+                hovertemplate="%{y:,.0f}"), secondary_y=False)
         else:
-            total_vol = frame_data['Call'] + frame_data['Put']
-            fig_intra.add_trace(go.Bar(x=frame_data['Strike'], y=total_vol, name='Total Vol', marker=dict(color='rgba(16, 185, 129, 0.85)', line=dict(color='#10B981', width=1))), secondary_y=False)
+            fig_intra.add_trace(go.Bar(x=frame_data['Strike'], y=total_vol, name='Total Vol', 
+                marker=dict(color='rgba(16, 185, 129, 0.85)', line=dict(color='#10B981', width=1)),
+                hovertemplate="%{y:,.0f}",
+                selected=dict(marker=dict(opacity=0.85)), unselected=dict(marker=dict(opacity=0.85))), secondary_y=False)
 
-        fig_intra.add_trace(go.Scatter(x=frame_data['Strike'], y=frame_data['Vol Settle'], name='Vol Settle', mode='lines+markers', line=dict(color='#EF4444', width=3, shape='spline'), marker=dict(size=6, color='#EF4444')), secondary_y=True)
+        fig_intra.add_trace(go.Scatter(x=frame_data['Strike'], y=frame_data['Vol Settle'], name='Vol Settle', mode='lines+markers', 
+            line=dict(color='#EF4444', width=3, shape='spline'), marker=dict(size=6, color='#EF4444'),
+            hovertemplate="%{y:.2f}",
+            selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=True)
         
         atm_intra = extract_atm(h1_intra)
         if atm_intra:
             fig_intra.add_vline(x=atm_intra, line_dash="dash", line_color="#888888", opacity=0.8, annotation_text="ATM", annotation_position="top")
             
         fig_intra.update_layout(barmode='group', bargap=0.15, height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5), margin=dict(l=10, r=10, t=10, b=10))
-        fig_intra.update_xaxes(title_text="Strike Price", showgrid=True, gridcolor='rgba(128,128,128,0.2)')
-        fig_intra.update_yaxes(title_text="Volume", secondary_y=False, showgrid=True, gridcolor='rgba(128,128,128,0.2)')
-        fig_intra.update_yaxes(title_text="Volatility", secondary_y=True, showgrid=False)
-        st.plotly_chart(fig_intra, use_container_width=True)
+        
+        fig_intra.update_xaxes(title_text="Strike Price", showgrid=True, gridcolor='rgba(128,128,128,0.2)', hoverformat=".0f", fixedrange=True)
+        fig_intra.update_yaxes(title_text="Volume", secondary_y=False, showgrid=True, gridcolor='rgba(128,128,128,0.2)', fixedrange=True)
+        fig_intra.update_yaxes(title_text="Volatility", secondary_y=True, showgrid=False, fixedrange=True)
+        
+        event_intra = st.plotly_chart(fig_intra, use_container_width=True, on_select="rerun", selection_mode="points", config={'displayModeBar': False})
+        
+        if event_intra and len(event_intra.selection.points) > 0:
+            clicked_strike = int(event_intra.selection.points[0]['x'])
+            show_strike_history(clicked_strike, df_intraday)
         
         col_play, col_slider = st.columns([1, 10])
-        
         with col_play:
             if st.session_state.is_playing:
                 if st.button(":material/pause: Pause", use_container_width=True):
@@ -305,23 +405,13 @@ if not df_intraday.empty:
             st.select_slider(
                 "Timeline", 
                 options=available_times, 
-                key="selected_time_state", 
+                key="selected_time_state",
+                format_func=lambda x: f"{x} น.",
                 label_visibility="collapsed"
             )
 
         if st.session_state.focus_slider:
-            components.html(
-                """
-                <script>
-                    const sliders = window.parent.document.querySelectorAll('div[role="slider"]');
-                    if (sliders.length > 0) {
-                        sliders[0].focus();
-                    }
-                </script>
-                """,
-                height=0,
-                width=0,
-            )
+            components.html("""<script>const sliders = window.parent.document.querySelectorAll('div[role="slider"]'); if (sliders.length > 0) { sliders[0].focus(); } </script>""", height=0, width=0)
             st.session_state.focus_slider = False
 
         st.markdown("---")
@@ -330,7 +420,6 @@ if not df_intraday.empty:
         table_df_intra = frame_data[['Strike', 'Call', 'Put', 'Vol Settle']].copy()
         table_df_intra['Total Vol'] = table_df_intra['Call'] + table_df_intra['Put']
         table_df_intra = table_df_intra[['Strike', 'Call', 'Put', 'Total Vol', 'Vol Settle']] 
-        
         st.dataframe(
             table_df_intra,
             column_config={
@@ -352,7 +441,9 @@ if not df_intraday.empty:
                 st.session_state.is_playing = False
                 st.rerun()
 
-    # =============== TAB 2: OI ===============
+    # ==========================================
+    # Tab 2: OI
+    # ==========================================
     with tab2:
         if not df_oi.empty:
             latest_oi = df_oi[df_oi['Datetime'] == df_oi['Datetime'].max()].copy().sort_values('Strike')
@@ -362,28 +453,42 @@ if not df_intraday.empty:
             h1_oi = latest_oi['Header1'].iloc[0]
             h2_oi = latest_oi['Header2'].iloc[0]
             atm_oi = extract_atm(h1_oi)
-            
             st.markdown(get_styled_header(h1_oi, h2_oi), unsafe_allow_html=True)
                 
             fig_oi = make_subplots(specs=[[{"secondary_y": True}]])
+            total_oi = latest_oi['Call'] + latest_oi['Put']
             
             if chart_mode == "Call / Put Vol":
-                fig_oi.add_trace(go.Bar(x=latest_oi['Strike'], y=latest_oi['Put'], name='Put OI', marker=dict(color='rgba(245, 158, 11, 0.85)', line=dict(color='#F59E0B', width=1))), secondary_y=False)
-                fig_oi.add_trace(go.Bar(x=latest_oi['Strike'], y=latest_oi['Call'], name='Call OI', marker=dict(color='rgba(59, 130, 246, 0.85)', line=dict(color='#3B82F6', width=1))), secondary_y=False)
+                fig_oi.add_trace(go.Bar(x=latest_oi['Strike'], y=latest_oi['Put'], name='Put OI', 
+                    marker=dict(color='rgba(245, 158, 11, 0.85)', line=dict(color='#F59E0B', width=1)),
+                    hovertemplate="%{y:,.0f}"), secondary_y=False)
+                    
+                fig_oi.add_trace(go.Bar(x=latest_oi['Strike'], y=latest_oi['Call'], name='Call OI', 
+                    marker=dict(color='rgba(59, 130, 246, 0.85)', line=dict(color='#3B82F6', width=1)),
+                    hovertemplate="%{y:,.0f}"), secondary_y=False)
+                    
+                fig_oi.add_trace(go.Scatter(x=latest_oi['Strike'], y=total_oi, name='Total OI', mode='markers', 
+                    marker=dict(color='rgba(0,0,0,0)', size=1), showlegend=False, 
+                    hovertemplate="%{y:,.0f}"), secondary_y=False)
             else:
-                total_oi = latest_oi['Call'] + latest_oi['Put']
-                fig_oi.add_trace(go.Bar(x=latest_oi['Strike'], y=total_oi, name='Total OI', marker=dict(color='rgba(16, 185, 129, 0.85)', line=dict(color='#10B981', width=1))), secondary_y=False)
+                fig_oi.add_trace(go.Bar(x=latest_oi['Strike'], y=total_oi, name='Total OI', 
+                    marker=dict(color='rgba(16, 185, 129, 0.85)', line=dict(color='#10B981', width=1)), 
+                    hovertemplate="%{y:,.0f}"), secondary_y=False)
                 
-            fig_oi.add_trace(go.Scatter(x=latest_oi['Strike'], y=latest_oi['Vol Settle'], name='Vol Settle', mode='lines+markers', line=dict(color='#EF4444', width=3, shape='spline'), marker=dict(size=6, color='#EF4444')), secondary_y=True)
+            fig_oi.add_trace(go.Scatter(x=latest_oi['Strike'], y=latest_oi['Vol Settle'], name='Vol Settle', mode='lines+markers', 
+                line=dict(color='#EF4444', width=3, shape='spline'), marker=dict(size=6, color='#EF4444'),
+                hovertemplate="%{y:.2f}"), secondary_y=True)
             
             if atm_oi:
                 fig_oi.add_vline(x=atm_oi, line_dash="dash", line_color="#888888", opacity=0.8, annotation_text="ATM", annotation_position="top")
                 
             fig_oi.update_layout(barmode='group', bargap=0.15, height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5), margin=dict(l=10, r=10, t=10, b=10))
-            fig_oi.update_xaxes(title_text="Strike Price", showgrid=True, gridcolor='rgba(128,128,128,0.2)')
-            fig_oi.update_yaxes(title_text="Open Interest", secondary_y=False, showgrid=True, gridcolor='rgba(128,128,128,0.2)')
-            fig_oi.update_yaxes(title_text="Volatility", secondary_y=True, showgrid=False)
-            st.plotly_chart(fig_oi, use_container_width=True)
+            
+            fig_oi.update_xaxes(title_text="Strike Price", showgrid=True, gridcolor='rgba(128,128,128,0.2)', hoverformat=".0f", fixedrange=True)
+            fig_oi.update_yaxes(title_text="Open Interest", secondary_y=False, showgrid=True, gridcolor='rgba(128,128,128,0.2)', fixedrange=True)
+            fig_oi.update_yaxes(title_text="Volatility", secondary_y=True, showgrid=False, fixedrange=True)
+            
+            st.plotly_chart(fig_oi, use_container_width=True, config={'displayModeBar': False})
 
             st.markdown("---")
             st.markdown("### :material/analytics: OI Volume Data")
