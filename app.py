@@ -119,6 +119,7 @@ def show_strike_history(strike_price, df_all_time):
         display_df['Call'] = [format_diff(v, d) for v, d in zip(display_df['Call'], call_diff)]
         display_df['Put'] = [format_diff(v, d) for v, d in zip(display_df['Put'], put_diff)]
         display_df['Total Vol'] = [format_diff(v, d) for v, d in zip(display_df['Total Vol'], total_diff)]
+        display_df = display_df.iloc[::-1].reset_index(drop=True)
         
         def color_bg(val):
             if isinstance(val, str):
