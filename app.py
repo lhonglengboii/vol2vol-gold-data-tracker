@@ -266,7 +266,7 @@ def fetch_github_history(file_path, max_commits=200):
     return pd.DataFrame()
 
 # ==========================================
-# Initialize session state
+# Initialize Session State
 # ==========================================
 if 'is_playing' not in st.session_state:
     st.session_state.is_playing = False
@@ -373,11 +373,25 @@ if not df_intraday.empty:
         fig_intra.update_yaxes(title_text="Volume", secondary_y=False, showgrid=True, gridcolor='rgba(128,128,128,0.2)', fixedrange=True)
         fig_intra.update_yaxes(title_text="Volatility", secondary_y=True, showgrid=False, fixedrange=True)
         
-        event_intra = st.plotly_chart(fig_intra, use_container_width=True, on_select="rerun", selection_mode="points", config={'displayModeBar': False})
+        event_intra = st.plotly_chart(
+            fig_intra, 
+            use_container_width=True, 
+            on_select="rerun", 
+            selection_mode="points", 
+            config={'displayModeBar': False},
+            key="intra_main_chart"
+        )
         
-        if event_intra and len(event_intra.selection.points) > 0:
-            clicked_strike = int(event_intra.selection.points[0]['x'])
+        current_x = [p['x'] for p in event_intra.selection.points] if event_intra and len(event_intra.selection.points) > 0 else []
+        last_x = st.session_state.get('last_selection_x', [])
+
+        if current_x and current_x != last_x:
+            st.session_state.is_playing = False 
+            clicked_strike = int(current_x[0])
+            st.session_state.last_selection_x = current_x
             show_strike_history(clicked_strike, df_intraday)
+        elif not current_x:
+            st.session_state.last_selection_x = []
         
         col_play, col_slider = st.columns([1, 10])
         with col_play:
