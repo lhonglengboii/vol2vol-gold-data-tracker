@@ -4,12 +4,12 @@ ssl._create_default_https_context = ssl._create_unverified_context
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
+from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
 from io import StringIO
 import re
-import datetime
 import time
 import concurrent.futures
 
@@ -78,13 +78,49 @@ def get_styled_header(h1_text, h2_text):
     </div>
     """
 
-@st.cache_data(show_spinner=False, ttl=120)
-def fetch_github_history(file_path, max_commits=200): 
+# --- ฟังก์ชันจัดการ Session Time และกรองข้อมูล (Intraday/OI) ---
+def filter_session_data(df, data_type):
+    if df.empty:
+        return df
+
+    df['Datetime'] = pd.to_datetime(df['Datetime'])
+    now = pd.Timestamp.now(tz='Asia/Bangkok')
+    
+    # หากำหนดการของ Session ปัจจุบัน
+    if now.hour < 10:
+        session_date = (now - timedelta(days=1)).date()
+    else:
+        session_date = now.date()
+
+    # ขอบเขตเวลา (10:00 น. ถึง 01:00 น. ของวันถัดไป)
+    start_time = pd.Timestamp(datetime.combine(session_date, datetime.min.time())).tz_localize('Asia/Bangkok') + timedelta(hours=10)
+    end_time = start_time + timedelta(hours=15) # +15 ชม. = 01:00 น.
+
+    # กรองประเภทจาก Header1 (Intraday จะไม่มีคำว่า Open Interest)
+    if data_type == "Intraday":
+        df = df[~df['Header1'].str.contains("Open Interest", case=False, na=False)]
+    elif data_type == "OI":
+        df = df[df['Header1'].str.contains("Open Interest", case=False, na=False)]
+
+    # กรองเวลา
+    df_filtered = df[(df['Datetime'] >= start_time) & (df['Datetime'] <= end_time)]
+    # เรียงเวลาจากอดีต -> ปัจจุบัน เสมอ!
+    df_filtered = df_filtered.sort_values('Datetime').reset_index(drop=True)
+    
+    return df_filtered
+
+@st.cache_data(show_spinner=False, ttl=180) 
+def fetch_github_history(file_path, max_commits=200):
     headers = {'User-Agent': 'Mozilla/5.0'}
     if GITHUB_TOKEN.strip():
         headers['Authorization'] = f'token {GITHUB_TOKEN.strip()}'
         
-    today_date = pd.Timestamp.now(tz='Asia/Bangkok').date()
+    now = pd.Timestamp.now(tz='Asia/Bangkok')
+    if now.hour < 10:
+        session_date = (now - timedelta(days=1)).date()
+    else:
+        session_date = now.date()
+        
     per_page = 100
     pages_to_fetch = (max_commits // per_page) + (1 if max_commits % per_page > 0 else 0)
     
@@ -108,7 +144,8 @@ def fetch_github_history(file_path, max_commits=200):
             date_str = commit['commit']['author']['date'] 
             dt = pd.to_datetime(date_str).tz_convert('Asia/Bangkok') if pd.to_datetime(date_str).tzinfo else pd.to_datetime(date_str).tz_localize('UTC').tz_convert('Asia/Bangkok')
             
-            if dt.date() != today_date: 
+            # ดึงข้อมูลมาตราบใดที่ยังอยู่ในหรือหลังวัน session_date
+            if dt.date() < session_date: 
                 keep_fetching = False
                 break
                 
@@ -159,43 +196,50 @@ if 'anim_idx' not in st.session_state:
     st.session_state.anim_idx = 0
 if 'focus_slider' not in st.session_state:
     st.session_state.focus_slider = False
-if 'last_refresh_time' not in st.session_state:
-    st.session_state.last_refresh_time = 0
+
+if 'my_intraday_data' not in st.session_state:
+    raw_intra = fetch_github_history("IntradayData.txt", max_commits=200)
+    raw_oi = fetch_github_history("OIData.txt", max_commits=1)
+    st.session_state.my_intraday_data = filter_session_data(raw_intra, "Intraday")
+    st.session_state.my_oi_data = filter_session_data(raw_oi, "OI")
 
 col_spin, col_dropdown, col_refresh = st.columns([7, 2, 1.5])
 
 with col_dropdown:
     chart_mode = st.selectbox("โหมดแสดงกราฟ", ["Call / Put Vol", "Total Vol"], label_visibility="collapsed")
+
+with col_spin:
+    status_placeholder = st.empty()
     
+    df_intraday = st.session_state.my_intraday_data
+    df_oi = st.session_state.my_oi_data
+    if not df_intraday.empty:
+        last_fetch = df_intraday['Datetime'].max().strftime("%H:%M:%S")
+        status_placeholder.caption(f"⏱  ข้อมูลล่าสุดเวลา **{last_fetch}** น.")
+
 with col_refresh:
-    current_time = time.time()
-    time_passed = current_time - st.session_state.last_refresh_time
-    is_cooldown = time_passed < 120  # ถ้าน้อยกว่า 120 วินาที จะเป็น True (ติดคูลดาวน์)
-    
-    if st.button(":material/refresh: Refresh Data", disabled=is_cooldown, use_container_width=True):
-        st.session_state.last_refresh_time = current_time # บันทึกเวลาที่กด
-        st.cache_data.clear() 
+    if st.button(":material/refresh: Refresh Data", use_container_width=True):
+        start_time = time.time()
+        
+        with status_placeholder:
+            with st.spinner("กำลังเชื่อมต่อข้อมูล..."):
+                raw_intra_new = fetch_github_history("IntradayData.txt", max_commits=200)
+                raw_oi_new = fetch_github_history("OIData.txt", max_commits=1)
+                
+                # --- จุดที่แก้ไขบัค! นำข้อมูลไปกรอง Session Date & เรียงเวลาก่อนยัดใส่ State ---
+                st.session_state.my_intraday_data = filter_session_data(raw_intra_new, "Intraday")
+                st.session_state.my_oi_data = filter_session_data(raw_oi_new, "OI")
+                
+                elapsed_time = time.time() - start_time
+                if elapsed_time < 3.0:
+                    time.sleep(3.0 - elapsed_time)
+        
         if 'selected_time_state' in st.session_state:
             del st.session_state['selected_time_state']
         st.session_state.is_playing = False
         st.rerun()
 
-with col_spin:
-    with st.spinner("กำลังเชื่อมต่อข้อมูล..."):
-        df_intraday = fetch_github_history("IntradayData.txt", max_commits=200)
-        df_oi = fetch_github_history("OIData.txt", max_commits=1)
-        
-        if not df_intraday.empty:
-            last_fetch = df_intraday['Datetime'].max().strftime("%H:%M:%S")
-            st.caption(f"⏱  ข้อมูลล่าสุดเวลา **{last_fetch}** น.")
-
 if not df_intraday.empty:
-    df_intraday = df_intraday[~df_intraday['Header1'].str.contains("Open Interest", case=False, na=False)]
-    cutoff_time = datetime.time(12, 30, 0)
-    df_intraday = df_intraday[df_intraday['Datetime'].dt.time >= cutoff_time]
-
-if not df_intraday.empty:
-    df_intraday = df_intraday.sort_values('Datetime', ascending=True)
     available_times = df_intraday['Time'].unique()
         
     if 'selected_time_state' not in st.session_state or st.session_state.selected_time_state not in available_times:
@@ -243,7 +287,7 @@ if not df_intraday.empty:
             if st.session_state.is_playing:
                 if st.button(":material/pause: Pause", use_container_width=True):
                     st.session_state.is_playing = False
-                    st.session_state.focus_slider = True  # สั่งให้ Focus ที่ Slider ตอน Pause
+                    st.session_state.focus_slider = True  
                     st.rerun()
             else:
                 if st.button(":material/play_arrow: Play", use_container_width=True):
@@ -265,7 +309,6 @@ if not df_intraday.empty:
                 label_visibility="collapsed"
             )
 
-        # ------ JavaScript สำหรับดึง Focus ไปที่ปุ่มกลมของ Slider ------
         if st.session_state.focus_slider:
             components.html(
                 """
@@ -280,7 +323,6 @@ if not df_intraday.empty:
                 width=0,
             )
             st.session_state.focus_slider = False
-        # ---------------------------------------------------------------
 
         st.markdown("---")
         st.markdown("### :material/analytics: Intraday Volume Data")
@@ -362,4 +404,4 @@ if not df_intraday.empty:
             )
 
 else:
-    st.info("รอการอัปเดตข้อมูลของ 'วันนี้' ตั้งแต่เวลา 12:30 น. เป็นต้นไปครับ (กดปุ่ม Refresh ด้านบนขวาเพื่อรีเฟรชข้อมูล)", icon=":material/lightbulb:")
+    st.info("รอข้อมูลอัปเดตตั้งแต่เวลา 10:00 น. เป็นต้นไป", icon=":material/lightbulb:")
