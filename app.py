@@ -84,7 +84,6 @@ def show_strike_history(strike_price, df_intra_all, df_oi_all):
     oi_hist = df_oi_all[df_oi_all['Strike'] == strike_price].copy()
     oi_hist = oi_hist.sort_values('Datetime')
     
-    # ------------------ Intraday ------------------
     if not history_df.empty:
         i_call = int(history_df.iloc[-1]['Call'])
         i_put = int(history_df.iloc[-1]['Put'])
@@ -95,7 +94,6 @@ def show_strike_history(strike_price, df_intra_all, df_oi_all):
     else:
         i_call = i_put = i_tot = i_vol = 0
         
-    # ------------------ Open Interest ------------------
     if not oi_hist.empty:
         o_call = int(oi_hist.iloc[-1]['Call'])
         o_put = int(oi_hist.iloc[-1]['Put'])
@@ -108,21 +106,39 @@ def show_strike_history(strike_price, df_intra_all, df_oi_all):
 
     vol_display = i_vol if i_vol > 0 else o_vol
 
-    st.markdown(
-        f"<div style='margin-top: -15px; font-size: 22px; font-weight: bold;'>Strike: {strike_price} &nbsp;&nbsp;<span class='t-vol' style='font-size: 18px;'>Vol Settle: {vol_display:.2f}</span></div>"
-        f"<div style='display: flex; flex-direction: column; gap: 4px; font-size: 15px; margin-bottom: 20px; margin-top: 12px; color: var(--text-color);'>"
-        f"  <div style='display: flex;'><div style='width: 140px;'><b>Intraday Volume</b></div><div>- &nbsp;&nbsp;<span class='t-call'>Call: {i_call}</span> &nbsp;&nbsp;&nbsp;&nbsp; <span class='t-put'>Put: {i_put}</span> &nbsp;&nbsp;&nbsp;&nbsp; <span>Total: {i_tot}</span></div></div>"
-        f"  <div style='display: flex;'><div style='width: 140px;'><b>Open Interest (OI)</b></div><div>- &nbsp;&nbsp;<span class='t-call'>Call: {o_call}</span> &nbsp;&nbsp;&nbsp;&nbsp; <span class='t-put'>Put: {o_put}</span> &nbsp;&nbsp;&nbsp;&nbsp; <span>Total: {o_tot}</span></div></div>"
-        f"</div>", 
-        unsafe_allow_html=True
-    )
+    html_table = f"""
+        <div style='margin-top: -15px; font-size: 22px; font-weight: bold;'>
+            Strike: {strike_price} &nbsp;&nbsp;<span class='t-vol' style='font-size: 18px;'>Vol Settle: {vol_display:.2f}</span>
+        </div>
+        <div style='margin-top: 15px; margin-bottom: 20px; color: var(--text-color);'>
+            <table style="width: 100%; border-collapse: collapse; font-size: 15px;">
+                <tr style="border-bottom: 1px solid rgba(128,128,128,0.2);">
+                    <th style="padding: 8px 0; border: none;"></th>
+                    <th style="padding: 8px 0; border: none; text-align: center;" class="t-call">Call</th>
+                    <th style="padding: 8px 0; border: none; text-align: center;" class="t-put">Put</th>
+                    <th style="padding: 8px 0; border: none; text-align: center;">Total</th>
+                </tr>
+                <tr style="border-bottom: 1px solid rgba(128,128,128,0.2); background-color: transparent;">
+                    <td style="padding: 12px 0; border: none; font-weight: bold; white-space: nowrap;">Intraday Volume</td>
+                    <td style="padding: 12px 0; border: none; text-align: center;" class="t-call">{i_call}</td>
+                    <td style="padding: 12px 0; border: none; text-align: center;" class="t-put">{i_put}</td>
+                    <td style="padding: 12px 0; border: none; text-align: center;">{i_tot}</td>
+                </tr>
+                <tr style="background-color: transparent;">
+                    <td style="padding: 12px 0; border: none; font-weight: bold; white-space: nowrap;">Open Interest (OI)</td>
+                    <td style="padding: 12px 0; border: none; text-align: center;" class="t-call">{o_call}</td>
+                    <td style="padding: 12px 0; border: none; text-align: center;" class="t-put">{o_put}</td>
+                    <td style="padding: 12px 0; border: none; text-align: center;">{o_tot}</td>
+                </tr>
+            </table>
+        </div>
+        """
+    st.markdown(html_table, unsafe_allow_html=True)
     
     if not history_df.empty:
         st.markdown("##### :material/schedule: Intraday Strike Price History")
         
-        display_df = history_df[['Time', 'Call', 'Put', 'Vol Settle']].copy()
-        if display_df['Vol Settle'].max() < 1:
-            display_df['Vol Settle'] = (display_df['Vol Settle'] * 100).round(2)
+        display_df = history_df[['Time', 'Call', 'Put']].copy()
             
         display_df['Time'] = display_df['Time'] + " น." 
         display_df['Total Vol'] = display_df['Call'] + display_df['Put']
@@ -141,7 +157,6 @@ def show_strike_history(strike_price, df_intra_all, df_oi_all):
         display_df['Call'] = [format_diff(v, d) for v, d in zip(display_df['Call'], call_diff)]
         display_df['Put'] = [format_diff(v, d) for v, d in zip(display_df['Put'], put_diff)]
         display_df['Total Vol'] = [format_diff(v, d) for v, d in zip(display_df['Total Vol'], total_diff)]
-        display_df['Vol Settle'] = display_df['Vol Settle'].map("{:.2f}".format)
         
         display_df = display_df.iloc[::-1].reset_index(drop=True)
         
@@ -163,13 +178,12 @@ def show_strike_history(strike_price, df_intra_all, df_oi_all):
             use_container_width=True, 
             hide_index=True, 
             height=400,
-            column_order=["Time", "Call", "Put", "Total Vol", "Vol Settle"],
+            column_order=["Time", "Call", "Put", "Total Vol"],
             column_config={
                 "Time": "Time",
                 "Call": "Call",
                 "Put": "Put",
-                "Total Vol": "Total",
-                "Vol Settle": "Vol Settle"
+                "Total Vol": "Total"
             }
         )
     else:
@@ -321,13 +335,13 @@ with col_spin:
     df_oi = st.session_state.my_oi_data
     if not df_intraday.empty:
         last_fetch = df_intraday['Datetime'].max().strftime("%H:%M:%S")
-        status_placeholder.caption(f"⏱  ข้อมูลล่าสุดเวลา **{last_fetch} น.**")
+        status_placeholder.caption(f"⏱ ข้อมูลล่าสุด: **{last_fetch} น.**")
 
 with col_refresh:
-    if st.button(":material/refresh: Refresh Data", use_container_width=True):
+    if st.button(":material/refresh: Refresh", use_container_width=True):
         start_time = time.time()
         with status_placeholder:
-            with st.spinner("กำลังอัปเดตข้อมูล..."):
+            with st.spinner("กำลังอัปเดต..."):
                 raw_intra_new = fetch_github_history("IntradayData.txt", max_commits=200)
                 raw_oi_new = fetch_github_history("OIData.txt", max_commits=1)
                 st.session_state.my_intraday_data = filter_session_data(raw_intra_new, "Intraday")
@@ -416,7 +430,7 @@ if not df_intraday.empty:
             use_container_width=True, 
             on_select="rerun", 
             selection_mode="points", 
-            config={'displayModeBar': False},
+            config={'displayModeBar': False}, 
             key="intra_main_chart"
         )
         
