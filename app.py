@@ -76,27 +76,54 @@ REPO = "pageth/Vol2VolData"
 # ==========================================
 # Strike Price History Popup
 # ==========================================
-@st.dialog("Strike Price History - Intraday Volume")
-def show_strike_history(strike_price, df_all_time):
-    history_df = df_all_time[df_all_time['Strike'] == strike_price].copy()
+@st.dialog("Strike Price Details")
+def show_strike_history(strike_price, df_intra_all, df_oi_all):
+    history_df = df_intra_all[df_intra_all['Strike'] == strike_price].copy()
     history_df = history_df.sort_values('Datetime')
     
+    oi_hist = df_oi_all[df_oi_all['Strike'] == strike_price].copy()
+    oi_hist = oi_hist.sort_values('Datetime')
+    
+    # ------------------ Intraday ------------------
     if not history_df.empty:
-        latest_call = int(history_df.iloc[-1]['Call'])
-        latest_put = int(history_df.iloc[-1]['Put'])
-        latest_total = latest_call + latest_put
+        i_call = int(history_df.iloc[-1]['Call'])
+        i_put = int(history_df.iloc[-1]['Put'])
+        i_tot = i_call + i_put
+        i_vol = history_df.iloc[-1]['Vol Settle']
+        if history_df['Vol Settle'].max() < 1:
+            i_vol *= 100
+    else:
+        i_call = i_put = i_tot = i_vol = 0
         
-        st.markdown(
-            f"<div style='margin-top: -15px; font-size: 22px; font-weight: bold;'>Strike: {strike_price}</div>"
-            f"<div style='font-size: 16px; margin-bottom: 15px; margin-top: 5px; color: var(--text-color);'>"
-            f"<span class='t-call'><b>Call Vol:</b> {latest_call}</span> &nbsp;&nbsp;|&nbsp;&nbsp; "
-            f"<span class='t-put'><b>Put Vol:</b> {latest_put}</span> &nbsp;&nbsp;|&nbsp;&nbsp; "
-            f"<span><b>Total Vol:</b> {latest_total}</span>"
-            f"</div>", 
-            unsafe_allow_html=True
-        )
+    # ------------------ Open Interest ------------------
+    if not oi_hist.empty:
+        o_call = int(oi_hist.iloc[-1]['Call'])
+        o_put = int(oi_hist.iloc[-1]['Put'])
+        o_tot = o_call + o_put
+        o_vol = oi_hist.iloc[-1]['Vol Settle']
+        if oi_hist['Vol Settle'].max() < 1:
+            o_vol *= 100
+    else:
+        o_call = o_put = o_tot = o_vol = 0
+
+    vol_display = i_vol if i_vol > 0 else o_vol
+
+    st.markdown(
+        f"<div style='margin-top: -15px; font-size: 22px; font-weight: bold;'>Strike: {strike_price} &nbsp;&nbsp;<span class='t-vol' style='font-size: 18px;'>Vol Settle: {vol_display:.2f}</span></div>"
+        f"<div style='display: flex; flex-direction: column; gap: 4px; font-size: 15px; margin-bottom: 20px; margin-top: 12px; color: var(--text-color);'>"
+        f"  <div style='display: flex;'><div style='width: 140px;'><b>Intraday Volume</b></div><div>- &nbsp;&nbsp;<span class='t-call'>Call: {i_call}</span> &nbsp;&nbsp;&nbsp;&nbsp; <span class='t-put'>Put: {i_put}</span> &nbsp;&nbsp;&nbsp;&nbsp; <span>Total: {i_tot}</span></div></div>"
+        f"  <div style='display: flex;'><div style='width: 140px;'><b>Open Interest (OI)</b></div><div>- &nbsp;&nbsp;<span class='t-call'>Call: {o_call}</span> &nbsp;&nbsp;&nbsp;&nbsp; <span class='t-put'>Put: {o_put}</span> &nbsp;&nbsp;&nbsp;&nbsp; <span>Total: {o_tot}</span></div></div>"
+        f"</div>", 
+        unsafe_allow_html=True
+    )
+    
+    if not history_df.empty:
+        st.markdown("##### :material/schedule: Intraday Strike Price History")
         
-        display_df = history_df[['Time', 'Call', 'Put']].copy()
+        display_df = history_df[['Time', 'Call', 'Put', 'Vol Settle']].copy()
+        if display_df['Vol Settle'].max() < 1:
+            display_df['Vol Settle'] = (display_df['Vol Settle'] * 100).round(2)
+            
         display_df['Time'] = display_df['Time'] + " น." 
         display_df['Total Vol'] = display_df['Call'] + display_df['Put']
         
@@ -114,6 +141,8 @@ def show_strike_history(strike_price, df_all_time):
         display_df['Call'] = [format_diff(v, d) for v, d in zip(display_df['Call'], call_diff)]
         display_df['Put'] = [format_diff(v, d) for v, d in zip(display_df['Put'], put_diff)]
         display_df['Total Vol'] = [format_diff(v, d) for v, d in zip(display_df['Total Vol'], total_diff)]
+        display_df['Vol Settle'] = display_df['Vol Settle'].map("{:.2f}".format)
+        
         display_df = display_df.iloc[::-1].reset_index(drop=True)
         
         def color_bg(val):
@@ -134,17 +163,17 @@ def show_strike_history(strike_price, df_all_time):
             use_container_width=True, 
             hide_index=True, 
             height=400,
-            column_order=["Time", "Call", "Put", "Total Vol"],
+            column_order=["Time", "Call", "Put", "Total Vol", "Vol Settle"],
             column_config={
                 "Time": "Time",
                 "Call": "Call",
                 "Put": "Put",
-                "Total Vol": "Total"
+                "Total Vol": "Total",
+                "Vol Settle": "Vol Settle"
             }
         )
     else:
-        st.markdown(f"<div style='margin-top: -15px; font-size: 28px; font-weight: bold;'>Strike: {strike_price}</div>", unsafe_allow_html=True)
-        st.info("ไม่มีข้อมูลประวัติสำหรับ Strike Price นี้")
+        st.info("ไม่มีข้อมูลประวัติ Intraday สำหรับ Strike Price นี้")
 
 def extract_atm(header_text):
     match = re.search(r'vs\s+([\d\.,]+)', str(header_text))
@@ -338,25 +367,34 @@ if not df_intraday.empty:
         fig_intra = make_subplots(specs=[[{"secondary_y": True}]])
         total_vol = frame_data['Call'] + frame_data['Put']
         
+        put_c = ['rgba(245, 158, 11, 1)' if v > 0 else 'rgba(0,0,0,0)' for v in frame_data['Put']]
+        put_l = ['#F59E0B' if v > 0 else 'rgba(0,0,0,0)' for v in frame_data['Put']]
+        
+        call_c = ['rgba(59, 130, 246, 1)' if v > 0 else 'rgba(0,0,0,0)' for v in frame_data['Call']]
+        call_l = ['#3B82F6' if v > 0 else 'rgba(0,0,0,0)' for v in frame_data['Call']]
+        
+        tot_c = ['rgba(16, 185, 129, 1)' if v > 0 else 'rgba(0,0,0,0)' for v in total_vol]
+        tot_l = ['#10B981' if v > 0 else 'rgba(0,0,0,0)' for v in total_vol]
+        
         if chart_mode == "Call / Put Vol":
             fig_intra.add_trace(go.Bar(x=frame_data['Strike'], y=frame_data['Put'], name='Put Vol', 
-                marker=dict(color='rgba(245, 158, 11, 0.85)', line=dict(color='#F59E0B', width=1)),
+                marker=dict(color=put_c, line=dict(color=put_l, width=1)),
                 hovertemplate="%{y:,.0f}",
-                selected=dict(marker=dict(opacity=0.85)), unselected=dict(marker=dict(opacity=0.85))), secondary_y=False)
+                selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
                 
             fig_intra.add_trace(go.Bar(x=frame_data['Strike'], y=frame_data['Call'], name='Call Vol', 
-                marker=dict(color='rgba(59, 130, 246, 0.85)', line=dict(color='#3B82F6', width=1)),
+                marker=dict(color=call_c, line=dict(color=call_l, width=1)),
                 hovertemplate="%{y:,.0f}",
-                selected=dict(marker=dict(opacity=0.85)), unselected=dict(marker=dict(opacity=0.85))), secondary_y=False)
+                selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
                 
             fig_intra.add_trace(go.Scatter(x=frame_data['Strike'], y=total_vol, name='Total Vol', mode='markers', 
                 marker=dict(color='rgba(0,0,0,0)', size=1), showlegend=False,
                 hovertemplate="%{y:,.0f}"), secondary_y=False)
         else:
             fig_intra.add_trace(go.Bar(x=frame_data['Strike'], y=total_vol, name='Total Vol', 
-                marker=dict(color='rgba(16, 185, 129, 0.85)', line=dict(color='#10B981', width=1)),
+                marker=dict(color=tot_c, line=dict(color=tot_l, width=1)),
                 hovertemplate="%{y:,.0f}",
-                selected=dict(marker=dict(opacity=0.85)), unselected=dict(marker=dict(opacity=0.85))), secondary_y=False)
+                selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
 
         fig_intra.add_trace(go.Scatter(x=frame_data['Strike'], y=frame_data['Vol Settle'], name='Vol Settle', mode='lines+markers', 
             line=dict(color='#EF4444', width=3, shape='spline'), marker=dict(size=6, color='#EF4444'),
@@ -389,7 +427,7 @@ if not df_intraday.empty:
             st.session_state.is_playing = False 
             clicked_strike = int(current_x[0])
             st.session_state.last_selection_x = current_x
-            show_strike_history(clicked_strike, df_intraday)
+            show_strike_history(clicked_strike, df_intraday, df_oi)
         elif not current_x:
             st.session_state.last_selection_x = []
         
@@ -426,11 +464,35 @@ if not df_intraday.empty:
             st.session_state.focus_slider = False
 
         st.markdown("---")
-        st.markdown("### :material/analytics: Intraday Volume Data")
+        
+        col_tb_head, col_tb_search1, col_tb_search2 = st.columns([6, 2.5, 1.5])
+        with col_tb_head:
+            st.markdown("### :material/analytics: Intraday Volume Data")
+            
+        with col_tb_search1:
+            strike_options = sorted(frame_data['Strike'].unique().tolist())
+            default_strike_val = int(atm_intra) if atm_intra else (int(frame_data['Strike'].median()) if not frame_data.empty else 4900)
+            
+            if default_strike_val in strike_options:
+                default_index = strike_options.index(default_strike_val)
+            else:
+                if strike_options:
+                    nearest = min(strike_options, key=lambda x: abs(x - default_strike_val))
+                    default_index = strike_options.index(nearest)
+                else:
+                    default_index = 0
+                    
+            search_strike = st.selectbox("ค้นหา Strike Price", options=strike_options, index=default_index, label_visibility="collapsed", key="intra_search_dropdown")
+            
+        with col_tb_search2:
+            if st.button(":material/search: ดูรายละเอียด", use_container_width=True, key="intra_search_btn"):
+                st.session_state.is_playing = False
+                show_strike_history(int(search_strike), df_intraday, df_oi)
         
         table_df_intra = frame_data[['Strike', 'Call', 'Put', 'Vol Settle']].copy()
         table_df_intra['Total Vol'] = table_df_intra['Call'] + table_df_intra['Put']
         table_df_intra = table_df_intra[['Strike', 'Call', 'Put', 'Total Vol', 'Vol Settle']] 
+        
         st.dataframe(
             table_df_intra,
             column_order=["Strike", "Call", "Put", "Total Vol", "Vol Settle"],
@@ -441,7 +503,9 @@ if not df_intraday.empty:
                 "Total Vol": st.column_config.ProgressColumn("Total Vol", format="%d", min_value=0, max_value=int(table_df_intra['Total Vol'].max()) if not table_df_intra.empty else 100),
                 "Vol Settle": st.column_config.NumberColumn("Vol Settle", format="%.2f"),
             },
-            hide_index=True, use_container_width=True, height=800
+            hide_index=True, 
+            use_container_width=True, 
+            height=800
         )
 
         if st.session_state.is_playing:
@@ -470,26 +534,39 @@ if not df_intraday.empty:
             fig_oi = make_subplots(specs=[[{"secondary_y": True}]])
             total_oi = latest_oi['Call'] + latest_oi['Put']
             
+            oi_put_c = ['rgba(245, 158, 11, 1)' if v > 0 else 'rgba(0,0,0,0)' for v in latest_oi['Put']]
+            oi_put_l = ['#F59E0B' if v > 0 else 'rgba(0,0,0,0)' for v in latest_oi['Put']]
+            
+            oi_call_c = ['rgba(59, 130, 246, 1)' if v > 0 else 'rgba(0,0,0,0)' for v in latest_oi['Call']]
+            oi_call_l = ['#3B82F6' if v > 0 else 'rgba(0,0,0,0)' for v in latest_oi['Call']]
+            
+            oi_tot_c = ['rgba(16, 185, 129, 1)' if v > 0 else 'rgba(0,0,0,0)' for v in total_oi]
+            oi_tot_l = ['#10B981' if v > 0 else 'rgba(0,0,0,0)' for v in total_oi]
+            
             if chart_mode == "Call / Put Vol":
                 fig_oi.add_trace(go.Bar(x=latest_oi['Strike'], y=latest_oi['Put'], name='Put OI', 
-                    marker=dict(color='rgba(245, 158, 11, 0.85)', line=dict(color='#F59E0B', width=1)),
-                    hovertemplate="%{y:,.0f}"), secondary_y=False)
+                    marker=dict(color=oi_put_c, line=dict(color=oi_put_l, width=1)),
+                    hovertemplate="%{y:,.0f}",
+                    selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
                     
                 fig_oi.add_trace(go.Bar(x=latest_oi['Strike'], y=latest_oi['Call'], name='Call OI', 
-                    marker=dict(color='rgba(59, 130, 246, 0.85)', line=dict(color='#3B82F6', width=1)),
-                    hovertemplate="%{y:,.0f}"), secondary_y=False)
+                    marker=dict(color=oi_call_c, line=dict(color=oi_call_l, width=1)),
+                    hovertemplate="%{y:,.0f}",
+                    selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
                     
                 fig_oi.add_trace(go.Scatter(x=latest_oi['Strike'], y=total_oi, name='Total OI', mode='markers', 
                     marker=dict(color='rgba(0,0,0,0)', size=1), showlegend=False, 
                     hovertemplate="%{y:,.0f}"), secondary_y=False)
             else:
                 fig_oi.add_trace(go.Bar(x=latest_oi['Strike'], y=total_oi, name='Total OI', 
-                    marker=dict(color='rgba(16, 185, 129, 0.85)', line=dict(color='#10B981', width=1)), 
-                    hovertemplate="%{y:,.0f}"), secondary_y=False)
+                    marker=dict(color=oi_tot_c, line=dict(color=oi_tot_l, width=1)), 
+                    hovertemplate="%{y:,.0f}",
+                    selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
                 
             fig_oi.add_trace(go.Scatter(x=latest_oi['Strike'], y=latest_oi['Vol Settle'], name='Vol Settle', mode='lines+markers', 
                 line=dict(color='#EF4444', width=3, shape='spline'), marker=dict(size=6, color='#EF4444'),
-                hovertemplate="%{y:.2f}"), secondary_y=True)
+                hovertemplate="%{y:.2f}",
+                selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=True)
             
             if atm_oi:
                 fig_oi.add_vline(x=atm_oi, line_dash="dash", line_color="#888888", opacity=0.8, annotation_text="ATM", annotation_position="top")
@@ -500,10 +577,52 @@ if not df_intraday.empty:
             fig_oi.update_yaxes(title_text="Open Interest", secondary_y=False, showgrid=True, gridcolor='rgba(128,128,128,0.2)', fixedrange=True)
             fig_oi.update_yaxes(title_text="Volatility", secondary_y=True, showgrid=False, fixedrange=True)
             
-            st.plotly_chart(fig_oi, use_container_width=True, config={'displayModeBar': False})
+            event_oi = st.plotly_chart(
+                fig_oi, 
+                use_container_width=True, 
+                on_select="rerun", 
+                selection_mode="points", 
+                config={'displayModeBar': False},
+                key="oi_main_chart"
+            )
+
+            current_x_oi = [p['x'] for p in event_oi.selection.points] if event_oi and len(event_oi.selection.points) > 0 else []
+            last_x_oi = st.session_state.get('last_selection_x_oi', [])
+
+            if current_x_oi and current_x_oi != last_x_oi:
+                st.session_state.is_playing = False 
+                clicked_strike = int(current_x_oi[0])
+                st.session_state.last_selection_x_oi = current_x_oi
+                show_strike_history(clicked_strike, df_intraday, df_oi)
+            elif not current_x_oi:
+                st.session_state.last_selection_x_oi = []
 
             st.markdown("---")
-            st.markdown("### :material/analytics: OI Volume Data")
+            
+            col_tb_head_oi, col_tb_search1_oi, col_tb_search2_oi = st.columns([6, 2.5, 1.5])
+            with col_tb_head_oi:
+                st.markdown("### :material/analytics: OI Volume Data")
+                
+            with col_tb_search1_oi:
+                strike_options_oi = sorted(latest_oi['Strike'].unique().tolist())
+                default_strike_val_oi = int(atm_oi) if atm_oi else (int(latest_oi['Strike'].median()) if not latest_oi.empty else 4900)
+                
+                if default_strike_val_oi in strike_options_oi:
+                    default_index_oi = strike_options_oi.index(default_strike_val_oi)
+                else:
+                    if strike_options_oi:
+                        nearest = min(strike_options_oi, key=lambda x: abs(x - default_strike_val_oi))
+                        default_index_oi = strike_options_oi.index(nearest)
+                    else:
+                        default_index_oi = 0
+                        
+                search_strike_oi = st.selectbox("ค้นหา Strike Price", options=strike_options_oi, index=default_index_oi, label_visibility="collapsed", key="oi_search_dropdown")
+                
+            with col_tb_search2_oi:
+                if st.button(":material/search: ดูรายละเอียด", use_container_width=True, key="oi_search_btn"):
+                    st.session_state.is_playing = False
+                    show_strike_history(int(search_strike_oi), df_intraday, df_oi)
+            
             table_df_oi = latest_oi[['Strike', 'Call', 'Put', 'Vol Settle']].copy()
             table_df_oi['Total Vol'] = table_df_oi['Call'] + table_df_oi['Put']
             table_df_oi = table_df_oi[['Strike', 'Call', 'Put', 'Total Vol', 'Vol Settle']] 
@@ -518,7 +637,9 @@ if not df_intraday.empty:
                     "Total Vol": st.column_config.ProgressColumn("Total Vol", format="%d", min_value=0, max_value=int(table_df_oi['Total Vol'].max()) if not table_df_oi.empty else 100),
                     "Vol Settle": st.column_config.NumberColumn("Vol Settle", format="%.2f"),
                 },
-                hide_index=True, use_container_width=True, height=800
+                hide_index=True, 
+                use_container_width=True, 
+                height=800
             )
 
 else:
