@@ -381,23 +381,18 @@ if not df_intraday.empty:
         fig_intra = make_subplots(specs=[[{"secondary_y": True}]])
         total_vol = frame_data['Call'] + frame_data['Put']
         
-        put_c = ['rgba(245, 158, 11, 1)' if v > 0 else 'rgba(0,0,0,0)' for v in frame_data['Put']]
-        put_l = ['#F59E0B' if v > 0 else 'rgba(0,0,0,0)' for v in frame_data['Put']]
-        
-        call_c = ['rgba(59, 130, 246, 1)' if v > 0 else 'rgba(0,0,0,0)' for v in frame_data['Call']]
-        call_l = ['#3B82F6' if v > 0 else 'rgba(0,0,0,0)' for v in frame_data['Call']]
-        
-        tot_c = ['rgba(16, 185, 129, 1)' if v > 0 else 'rgba(0,0,0,0)' for v in total_vol]
-        tot_l = ['#10B981' if v > 0 else 'rgba(0,0,0,0)' for v in total_vol]
+        put_w = [1 if v > 0 else 0 for v in frame_data['Put']]
+        call_w = [1 if v > 0 else 0 for v in frame_data['Call']]
+        tot_w = [1 if v > 0 else 0 for v in total_vol]
         
         if chart_mode == "Call / Put Vol":
             fig_intra.add_trace(go.Bar(x=frame_data['Strike'], y=frame_data['Put'], name='Put Vol', 
-                marker=dict(color=put_c, line=dict(color=put_l, width=1)),
+                marker=dict(color='#F59E0B', line=dict(color='#F59E0B', width=put_w)),
                 hovertemplate="%{y:,.0f}",
                 selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
                 
             fig_intra.add_trace(go.Bar(x=frame_data['Strike'], y=frame_data['Call'], name='Call Vol', 
-                marker=dict(color=call_c, line=dict(color=call_l, width=1)),
+                marker=dict(color='#3B82F6', line=dict(color='#3B82F6', width=call_w)),
                 hovertemplate="%{y:,.0f}",
                 selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
                 
@@ -406,7 +401,7 @@ if not df_intraday.empty:
                 hovertemplate="%{y:,.0f}"), secondary_y=False)
         else:
             fig_intra.add_trace(go.Bar(x=frame_data['Strike'], y=total_vol, name='Total Vol', 
-                marker=dict(color=tot_c, line=dict(color=tot_l, width=1)),
+                marker=dict(color='#10B981', line=dict(color='#10B981', width=tot_w)),
                 hovertemplate="%{y:,.0f}",
                 selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
 
@@ -547,24 +542,19 @@ if not df_intraday.empty:
                 
             fig_oi = make_subplots(specs=[[{"secondary_y": True}]])
             total_oi = latest_oi['Call'] + latest_oi['Put']
-            
-            oi_put_c = ['rgba(245, 158, 11, 1)' if v > 0 else 'rgba(0,0,0,0)' for v in latest_oi['Put']]
-            oi_put_l = ['#F59E0B' if v > 0 else 'rgba(0,0,0,0)' for v in latest_oi['Put']]
-            
-            oi_call_c = ['rgba(59, 130, 246, 1)' if v > 0 else 'rgba(0,0,0,0)' for v in latest_oi['Call']]
-            oi_call_l = ['#3B82F6' if v > 0 else 'rgba(0,0,0,0)' for v in latest_oi['Call']]
-            
-            oi_tot_c = ['rgba(16, 185, 129, 1)' if v > 0 else 'rgba(0,0,0,0)' for v in total_oi]
-            oi_tot_l = ['#10B981' if v > 0 else 'rgba(0,0,0,0)' for v in total_oi]
+
+            oi_put_w = [1 if v > 0 else 0 for v in latest_oi['Put']]
+            oi_call_w = [1 if v > 0 else 0 for v in latest_oi['Call']]
+            oi_tot_w = [1 if v > 0 else 0 for v in total_oi]
             
             if chart_mode == "Call / Put Vol":
                 fig_oi.add_trace(go.Bar(x=latest_oi['Strike'], y=latest_oi['Put'], name='Put OI', 
-                    marker=dict(color=oi_put_c, line=dict(color=oi_put_l, width=1)),
+                    marker=dict(color='#F59E0B', line=dict(color='#F59E0B', width=oi_put_w)),
                     hovertemplate="%{y:,.0f}",
                     selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
                     
                 fig_oi.add_trace(go.Bar(x=latest_oi['Strike'], y=latest_oi['Call'], name='Call OI', 
-                    marker=dict(color=oi_call_c, line=dict(color=oi_call_l, width=1)),
+                    marker=dict(color='#3B82F6', line=dict(color='#3B82F6', width=oi_call_w)),
                     hovertemplate="%{y:,.0f}",
                     selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
                     
@@ -573,7 +563,7 @@ if not df_intraday.empty:
                     hovertemplate="%{y:,.0f}"), secondary_y=False)
             else:
                 fig_oi.add_trace(go.Bar(x=latest_oi['Strike'], y=total_oi, name='Total OI', 
-                    marker=dict(color=oi_tot_c, line=dict(color=oi_tot_l, width=1)), 
+                    marker=dict(color='#10B981', line=dict(color='#10B981', width=oi_tot_w)), 
                     hovertemplate="%{y:,.0f}",
                     selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
                 
