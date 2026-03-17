@@ -189,11 +189,49 @@ def show_strike_history(strike_price, df_intra_all, df_oi_all):
     else:
         st.info("ไม่มีข้อมูลประวัติ Intraday สำหรับ Strike Price นี้")
 
+def safe_max(series):
+    try:
+        m = int(series.max())
+        return m if m > 0 else 1
+    except:
+        return 1
+
 def extract_atm(header_text):
     match = re.search(r'vs\s+([\d\.,]+)', str(header_text))
     if match:
         return float(match.group(1).replace(',', ''))
     return None
+
+def _get_chart_points(chart_key):
+    state = st.session_state.get(chart_key)
+    if state is None:
+        return []
+
+    try:
+        return state.selection.points
+    except Exception:
+        try:
+            return state["selection"]["points"]
+        except Exception:
+            return []
+
+def handle_intra_chart_select():
+    points = _get_chart_points("intra_main_chart")
+    if points:
+        try:
+            st.session_state.is_playing = False
+            st.session_state.dialog_strike = int(points[0]["x"])
+        except Exception:
+            pass
+
+def handle_oi_chart_select():
+    points = _get_chart_points("oi_main_chart")
+    if points:
+        try:
+            st.session_state.is_playing = False
+            st.session_state.dialog_strike = int(points[0]["x"])
+        except Exception:
+            pass
 
 def get_styled_header(h1_text, h2_text):
     h2_styled = h2_text.replace("Put:", "<span class='t-put'>Put:</span>")\
@@ -317,6 +355,8 @@ if 'anim_idx' not in st.session_state:
     st.session_state.anim_idx = 0
 if 'focus_slider' not in st.session_state:
     st.session_state.focus_slider = False
+if 'dialog_strike' not in st.session_state:
+    st.session_state.dialog_strike = None
 
 if 'my_intraday_data' not in st.session_state:
     raw_intra = fetch_github_history("IntradayData.txt", max_commits=200)
@@ -414,31 +454,24 @@ if not df_intraday.empty:
         if atm_intra:
             fig_intra.add_vline(x=atm_intra, line_dash="dash", line_color="#888888", opacity=0.8, annotation_text="ATM", annotation_position="top")
             
-        fig_intra.update_layout(barmode='group', bargap=0.15, height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5), margin=dict(l=10, r=10, t=10, b=10))
+        fig_intra.update_layout(barmode='group', bargap=0.15, height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',clickmode="event+select", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5), margin=dict(l=10, r=10, t=10, b=10))
         
         fig_intra.update_xaxes(title_text="Strike Price", showgrid=True, gridcolor='rgba(128,128,128,0.2)', hoverformat=".0f", fixedrange=True)
         fig_intra.update_yaxes(title_text="Volume", secondary_y=False, showgrid=True, gridcolor='rgba(128,128,128,0.2)', fixedrange=True)
         fig_intra.update_yaxes(title_text="Volatility", secondary_y=True, showgrid=False, fixedrange=True)
         
-        event_intra = st.plotly_chart(
-            fig_intra, 
-            use_container_width=True, 
-            on_select="rerun", 
-            selection_mode="points", 
-            config={'displayModeBar': False}, 
+        st.plotly_chart(
+            fig_intra,
+            use_container_width=True,
+            on_select=handle_intra_chart_select,
+            selection_mode="points",
+            config={'displayModeBar': False},
             key="intra_main_chart"
         )
-        
-        current_x = [p['x'] for p in event_intra.selection.points] if event_intra and len(event_intra.selection.points) > 0 else []
-        last_x = st.session_state.get('last_selection_x', [])
 
-        if current_x and current_x != last_x:
-            st.session_state.is_playing = False 
-            clicked_strike = int(current_x[0])
-            st.session_state.last_selection_x = current_x
-            show_strike_history(clicked_strike, df_intraday, df_oi)
-        elif not current_x:
-            st.session_state.last_selection_x = []
+        if st.session_state.dialog_strike is not None:
+            show_strike_history(int(st.session_state.dialog_strike), df_intraday, df_oi)
+            st.session_state.dialog_strike = None
         
         col_play, col_slider = st.columns([1, 10])
         with col_play:
@@ -507,9 +540,9 @@ if not df_intraday.empty:
             column_order=["Strike", "Call", "Put", "Total Vol", "Vol Settle"],
             column_config={
                 "Strike": st.column_config.NumberColumn("Strike Price", format="%d"),
-                "Call": st.column_config.ProgressColumn("Call Volume", format="%d", min_value=0, max_value=int(table_df_intra['Call'].max()) if not table_df_intra.empty else 100),
-                "Put": st.column_config.ProgressColumn("Put Volume", format="%d", min_value=0, max_value=int(table_df_intra['Put'].max()) if not table_df_intra.empty else 100),
-                "Total Vol": st.column_config.ProgressColumn("Total Vol", format="%d", min_value=0, max_value=int(table_df_intra['Total Vol'].max()) if not table_df_intra.empty else 100),
+                "Call": st.column_config.ProgressColumn("Call Volume", format="%d", min_value=0, max_value=safe_max(table_df_intra['Call'])),
+                "Put": st.column_config.ProgressColumn("Put Volume", format="%d", min_value=0, max_value=safe_max(table_df_intra['Put'])),
+                "Total Vol": st.column_config.ProgressColumn("Total Vol", format="%d", min_value=0, max_value=safe_max(table_df_intra['Total Vol'])),
                 "Vol Settle": st.column_config.NumberColumn("Vol Settle", format="%.2f"),
             },
             hide_index=True, 
@@ -575,31 +608,34 @@ if not df_intraday.empty:
             if atm_oi:
                 fig_oi.add_vline(x=atm_oi, line_dash="dash", line_color="#888888", opacity=0.8, annotation_text="ATM", annotation_position="top")
                 
-            fig_oi.update_layout(barmode='group', bargap=0.15, height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5), margin=dict(l=10, r=10, t=10, b=10))
-            
+            fig_oi.update_layout(
+                barmode='group',
+                bargap=0.15,
+                height=500,
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                clickmode="event+select",   # ✅ เพิ่มบรรทัดนี้
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5),
+                margin=dict(l=10, r=10, t=10, b=10)
+            )
+
             fig_oi.update_xaxes(title_text="Strike Price", showgrid=True, gridcolor='rgba(128,128,128,0.2)', hoverformat=".0f", fixedrange=True)
             fig_oi.update_yaxes(title_text="Open Interest", secondary_y=False, showgrid=True, gridcolor='rgba(128,128,128,0.2)', fixedrange=True)
             fig_oi.update_yaxes(title_text="Volatility", secondary_y=True, showgrid=False, fixedrange=True)
             
-            event_oi = st.plotly_chart(
-                fig_oi, 
-                use_container_width=True, 
-                on_select="rerun", 
-                selection_mode="points", 
+            st.plotly_chart(
+                fig_oi,
+                use_container_width=True,
+                on_select=handle_oi_chart_select,
+                selection_mode="points",
                 config={'displayModeBar': False},
                 key="oi_main_chart"
             )
 
-            current_x_oi = [p['x'] for p in event_oi.selection.points] if event_oi and len(event_oi.selection.points) > 0 else []
-            last_x_oi = st.session_state.get('last_selection_x_oi', [])
-
-            if current_x_oi and current_x_oi != last_x_oi:
-                st.session_state.is_playing = False 
-                clicked_strike = int(current_x_oi[0])
-                st.session_state.last_selection_x_oi = current_x_oi
-                show_strike_history(clicked_strike, df_intraday, df_oi)
-            elif not current_x_oi:
-                st.session_state.last_selection_x_oi = []
+            if st.session_state.dialog_strike is not None:
+                show_strike_history(int(st.session_state.dialog_strike), df_intraday, df_oi)
+                st.session_state.dialog_strike = None
 
             st.markdown("---")
             
@@ -636,9 +672,9 @@ if not df_intraday.empty:
                 column_order=["Strike", "Call", "Put", "Total Vol", "Vol Settle"],
                 column_config={
                     "Strike": st.column_config.NumberColumn("Strike Price", format="%d"),
-                    "Call": st.column_config.ProgressColumn("Call Volume", format="%d", min_value=0, max_value=int(table_df_oi['Call'].max()) if not table_df_oi.empty else 100),
-                    "Put": st.column_config.ProgressColumn("Put Volume", format="%d", min_value=0, max_value=int(table_df_oi['Put'].max()) if not table_df_oi.empty else 100),
-                    "Total Vol": st.column_config.ProgressColumn("Total Vol", format="%d", min_value=0, max_value=int(table_df_oi['Total Vol'].max()) if not table_df_oi.empty else 100),
+                    "Call": st.column_config.ProgressColumn("Call Volume", format="%d", min_value=0, max_value=safe_max(table_df_oi['Call'])),
+                    "Put": st.column_config.ProgressColumn("Put Volume", format="%d", min_value=0, max_value=safe_max(table_df_oi['Put'])),
+                    "Total Vol": st.column_config.ProgressColumn("Total Vol", format="%d", min_value=0, max_value=safe_max(table_df_oi['Total Vol'])),
                     "Vol Settle": st.column_config.NumberColumn("Vol Settle", format="%.2f"),
                 },
                 hide_index=True, 
