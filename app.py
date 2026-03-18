@@ -74,6 +74,36 @@ st.markdown("""
 REPO = "pageth/Vol2VolData"
 
 # ==========================================
+# ฟังก์ชันตรวจสอบ Market Session (รองรับ DST)
+# ==========================================
+def get_market_session(dt_bkk):
+    try:
+        # แปลงเป็น UTC ก่อนเพื่อความแม่นยำ
+        dt_utc = dt_bkk.tz_convert('UTC')
+        
+        # แปลงเป็นเวลาท้องถิ่นของตลาด (Pandas จัดการ DST ให้อัตโนมัติ)
+        dt_ny = dt_utc.tz_convert('America/New_York')
+        dt_lon = dt_utc.tz_convert('Europe/London')
+        dt_tokyo = dt_utc.tz_convert('Asia/Tokyo')
+        
+        sessions = []
+        # เวลาทำการหลักของ Tokyo (08:00 - 15:00 เวลาโตเกียว)
+        if 8 <= dt_tokyo.hour < 15:
+            sessions.append("Tokyo")
+        # เวลาทำการหลักของ London (08:00 - 16:30 เวลาลอนดอน)
+        if 8 <= dt_lon.hour < 16 or (dt_lon.hour == 16 and dt_lon.minute <= 30):
+            sessions.append("London")
+        # เวลาทำการหลักของ New York (08:00 - 17:00 เวลานิวยอร์ก)
+        if 8 <= dt_ny.hour < 17:
+            sessions.append("New York")
+            
+        if not sessions:
+            return "After Hours"
+        return " & ".join(sessions)
+    except Exception:
+        return ""
+
+# ==========================================
 # Strike Price History Popup
 # ==========================================
 @st.dialog("Strike Price Details")
@@ -189,7 +219,6 @@ def show_strike_history(strike_price, df_intra_all, df_oi_all):
     else:
         st.info("ไม่มีข้อมูลประวัติ Intraday สำหรับ Strike Price นี้")
 
-# ✅ 1. แก้ไข safe_max ป้องกัน RangeError
 def safe_max(series):
     try:
         if series.empty:
@@ -351,6 +380,15 @@ def fetch_github_history(file_path, max_commits=200):
         return pd.concat(all_data, ignore_index=True)
     return pd.DataFrame()
 
+# ฟังก์ชันสำหรับแต่งสีคอลัมน์ในตาราง
+def style_df(df, col, color_hex):
+    if df.empty: return df
+    try:
+        return df.style.map(lambda _: f'color: {color_hex}; font-weight: bold;', subset=[col])
+    except AttributeError:
+        return df.style.applymap(lambda _: f'color: {color_hex}; font-weight: bold;', subset=[col])
+
+
 # ==========================================
 # Initialize Session State
 # ==========================================
@@ -401,6 +439,13 @@ with col_refresh:
 
 if not df_intraday.empty:
     available_times = df_intraday['Time'].unique()
+    
+    # คำนวณ Market Session สำหรับแต่ละช่วงเวลาที่ปรากฎใน Timeline
+    session_map = {}
+    for val in available_times:
+        dt_first = df_intraday[df_intraday['Time'] == val]['Datetime'].iloc[0]
+        session_map[val] = get_market_session(dt_first)
+        
     if 'selected_time_state' not in st.session_state or st.session_state.selected_time_state not in available_times:
         st.session_state.selected_time_state = available_times[-1]
 
@@ -408,7 +453,8 @@ if not df_intraday.empty:
         if 'anim_idx' in st.session_state and st.session_state.anim_idx < len(available_times):
             st.session_state.selected_time_state = available_times[st.session_state.anim_idx]
 
-    tab1, tab2 = st.tabs([":material/show_chart: Intraday Volume", ":material/account_balance: Open Interest (OI)"])
+    # เพิ่ม Tab 3 (Top Ranking) มาให้ด้วยเลย
+    tab1, tab2, tab3 = st.tabs([":material/show_chart: Intraday Volume", ":material/account_balance: Open Interest (OI)", ":material/leaderboard: Top Ranking"])
     
     # ==========================================
     # Tab 1: Intraday Volume
@@ -420,6 +466,12 @@ if not df_intraday.empty:
             frame_data['Vol Settle'] = (frame_data['Vol Settle'] * 100).round(2)
             
         h1_intra = frame_data['Header1'].iloc[0]
+        
+        # เพิ่ม Market Session ใน Header (ถ้ามีข้อมูลตลาด)
+        market_ses = session_map.get(time_val, "")
+        if market_ses:
+            h1_intra = f"{h1_intra} &nbsp;🌍 <span style='font-size: 0.9em; color:#888;'>({market_ses})</span>"
+            
         h2_intra = frame_data['Header2'].iloc[0]
         st.markdown(get_styled_header(h1_intra, h2_intra), unsafe_allow_html=True)
         
@@ -450,7 +502,6 @@ if not df_intraday.empty:
                 hovertemplate="%{y:,.0f}",
                 selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
 
-        # ✅ 2. แก้กราฟ Vol Settle ของ Intraday ป้องกันเส้นหักลง 0
         vol_intra_y = [val if val > 0 else None for val in frame_data['Vol Settle']]
         fig_intra.add_trace(go.Scatter(x=frame_data['Strike'], y=vol_intra_y, name='Vol Settle', mode='lines+markers', 
             line=dict(color='#EF4444', width=3, shape='spline'), marker=dict(size=6, color='#EF4444'),
@@ -480,31 +531,58 @@ if not df_intraday.empty:
             show_strike_history(int(st.session_state.dialog_strike), df_intraday, df_oi)
             st.session_state.dialog_strike = None
         
-        col_play, col_slider = st.columns([1, 10])
-        with col_play:
-            if st.session_state.is_playing:
-                if st.button(":material/pause: Pause", use_container_width=True):
+        # ปรับการจัดเรียงปุ่มควบคุม (Back | Play/Pause | Next)
+        col_controls, col_slider = st.columns([1.5, 10])
+        with col_controls:
+            c1, c2, c3 = st.columns(3)
+            
+            # หา Index ล่าสุดเพื่อใช้เลื่อนหน้า/หลัง
+            try:
+                current_idx = list(available_times).index(st.session_state.selected_time_state)
+            except ValueError:
+                current_idx = len(available_times) - 1
+                
+            with c1:
+                # ปุ่มย้อนกลับ (Back)
+                if st.button(":material/skip_previous:", help="Back", use_container_width=True):
                     st.session_state.is_playing = False
-                    st.session_state.focus_slider = True  
+                    new_idx = max(0, current_idx - 1)
+                    st.session_state.selected_time_state = available_times[new_idx]
+                    st.session_state.focus_slider = True
                     st.rerun()
-            else:
-                if st.button(":material/play_arrow: Play", use_container_width=True):
-                    st.session_state.is_playing = True
-                    current_idx = list(available_times).index(st.session_state.selected_time_state)
-                    if current_idx == len(available_times) - 1:
-                        st.session_state.anim_idx = 0
-                    else:
-                        st.session_state.anim_idx = current_idx
                     
-                    st.session_state.selected_time_state = available_times[st.session_state.anim_idx]
+            with c2:
+                if st.session_state.is_playing:
+                    if st.button(":material/pause:", help="Pause", use_container_width=True):
+                        st.session_state.is_playing = False
+                        st.session_state.focus_slider = True  
+                        st.rerun()
+                else:
+                    if st.button(":material/play_arrow:", help="Play", use_container_width=True):
+                        st.session_state.is_playing = True
+                        if current_idx == len(available_times) - 1:
+                            st.session_state.anim_idx = 0
+                        else:
+                            st.session_state.anim_idx = current_idx
+                        st.session_state.selected_time_state = available_times[st.session_state.anim_idx]
+                        st.rerun()
+                        
+            with c3:
+                # ปุ่มถัดไป (Next)
+                if st.button(":material/skip_next:", help="Next", use_container_width=True):
+                    st.session_state.is_playing = False
+                    new_idx = min(len(available_times) - 1, current_idx + 1)
+                    st.session_state.selected_time_state = available_times[new_idx]
+                    st.session_state.focus_slider = True
                     st.rerun()
                     
         with col_slider:
+            # เพิ่ม Market Session ใน Label ของ Timeline
             st.select_slider(
                 "Timeline", 
                 options=available_times, 
                 key="selected_time_state",
-                format_func=lambda x: f"{x} น.",
+                format_func=lambda x: f"{x} น. ({session_map.get(x, '')})" if session_map.get(x, '') else f"{x} น.",
                 label_visibility="collapsed"
             )
 
@@ -547,8 +625,8 @@ if not df_intraday.empty:
             column_order=["Strike", "Call", "Put", "Total Vol", "Vol Settle"],
             column_config={
                 "Strike": st.column_config.NumberColumn("Strike Price", format="%d"),
-                "Call": st.column_config.ProgressColumn("Call Volume", format="%d", min_value=0, max_value=safe_max(table_df_intra['Call'])),
-                "Put": st.column_config.ProgressColumn("Put Volume", format="%d", min_value=0, max_value=safe_max(table_df_intra['Put'])),
+                "Call": st.column_config.ProgressColumn("Call Vol", format="%d", min_value=0, max_value=safe_max(table_df_intra['Call'])),
+                "Put": st.column_config.ProgressColumn("Put Vol", format="%d", min_value=0, max_value=safe_max(table_df_intra['Put'])),
                 "Total Vol": st.column_config.ProgressColumn("Total Vol", format="%d", min_value=0, max_value=safe_max(table_df_intra['Total Vol'])),
                 "Vol Settle": st.column_config.NumberColumn("Vol Settle", format="%.2f"),
             },
@@ -607,7 +685,6 @@ if not df_intraday.empty:
                     hovertemplate="%{y:,.0f}",
                     selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
                 
-            # ✅ 2. แก้กราฟ Vol Settle ของ OI ป้องกันเส้นหักลง 0
             vol_oi_y = [val if val > 0 else None for val in latest_oi['Vol Settle']]
             fig_oi.add_trace(go.Scatter(x=latest_oi['Strike'], y=vol_oi_y, name='Vol Settle', mode='lines+markers', 
                 line=dict(color='#EF4444', width=3, shape='spline'), marker=dict(size=6, color='#EF4444'),
@@ -681,15 +758,63 @@ if not df_intraday.empty:
                 column_order=["Strike", "Call", "Put", "Total Vol", "Vol Settle"],
                 column_config={
                     "Strike": st.column_config.NumberColumn("Strike Price", format="%d"),
-                    "Call": st.column_config.ProgressColumn("Call Volume", format="%d", min_value=0, max_value=safe_max(table_df_oi['Call'])),
-                    "Put": st.column_config.ProgressColumn("Put Volume", format="%d", min_value=0, max_value=safe_max(table_df_oi['Put'])),
-                    "Total Vol": st.column_config.ProgressColumn("Total Vol", format="%d", min_value=0, max_value=safe_max(table_df_oi['Total Vol'])),
+                    "Call": st.column_config.ProgressColumn("Call OI", format="%d", min_value=0, max_value=safe_max(table_df_oi['Call'])),
+                    "Put": st.column_config.ProgressColumn("Put OI", format="%d", min_value=0, max_value=safe_max(table_df_oi['Put'])),
+                    "Total Vol": st.column_config.ProgressColumn("Total OI", format="%d", min_value=0, max_value=safe_max(table_df_oi['Total Vol'])),
                     "Vol Settle": st.column_config.NumberColumn("Vol Settle", format="%.2f"),
                 },
                 hide_index=True, 
                 use_container_width=True, 
                 height=800
             )
+
+    # ==========================================
+    # Tab 3: Top Ranking 
+    # ==========================================
+    with tab3:
+        if not df_intraday.empty:
+            df_intra_latest = df_intraday[df_intraday['Datetime'] == df_intraday['Datetime'].max()].copy()
+            df_intra_latest['Total'] = df_intra_latest['Call'] + df_intra_latest['Put']
+            
+            df_oi_latest = pd.DataFrame()
+            if not df_oi.empty:
+                df_oi_latest = df_oi[df_oi['Datetime'] == df_oi['Datetime'].max()].copy()
+                df_oi_latest['Total'] = df_oi_latest['Call'] + df_oi_latest['Put']
+
+            st.markdown("### :material/emoji_events: Top Intraday Volume (สะสมสูงสุด 5 อันดับ)")
+
+            c1, c2, c3 = st.columns(3)
+            c1.dataframe(style_df(df_intra_latest.nlargest(5, 'Call')[['Strike', 'Call']], 'Call', '#3B82F6'), hide_index=True, use_container_width=True)
+            c2.dataframe(style_df(df_intra_latest.nlargest(5, 'Put')[['Strike', 'Put']], 'Put', '#F59E0B'), hide_index=True, use_container_width=True)
+            c3.dataframe(style_df(df_intra_latest.nlargest(5, 'Total')[['Strike', 'Total']], 'Total', '#10B981'), hide_index=True, use_container_width=True)
+
+            if not df_oi_latest.empty:
+                st.markdown("---")
+                st.markdown("### :material/account_balance: Top Open Interest (OI) (สะสมสูงสุด 5 อันดับ)")
+                c1, c2, c3 = st.columns(3)
+                c1.dataframe(style_df(df_oi_latest.nlargest(5, 'Call')[['Strike', 'Call']], 'Call', '#3B82F6'), hide_index=True, use_container_width=True)
+                c2.dataframe(style_df(df_oi_latest.nlargest(5, 'Put')[['Strike', 'Put']], 'Put', '#F59E0B'), hide_index=True, use_container_width=True)
+                c3.dataframe(style_df(df_oi_latest.nlargest(5, 'Total')[['Strike', 'Total']], 'Total', '#10B981'), hide_index=True, use_container_width=True)
+
+            st.markdown("---")
+            st.markdown("### :material/local_fire_department: Top Active Intraday Volume (การเปลี่ยนแปลงมากสุดตลอดวัน 10 อันดับ)")
+            
+            df_first_day = df_intraday.sort_values('Datetime').groupby('Strike').first()[['Call', 'Put']]
+            df_last_day = df_intraday.sort_values('Datetime').groupby('Strike').last()[['Call', 'Put']]
+            df_day_diff = (df_last_day - df_first_day).reset_index()
+            df_day_diff['Total'] = df_day_diff['Call'] + df_day_diff['Put']
+
+            st.markdown("#### :material/trending_up: เพิ่มขึ้นมากที่สุด (Increase)")
+            c1, c2, c3 = st.columns(3)
+            c1.dataframe(style_df(df_day_diff[df_day_diff['Call']>0].nlargest(10, 'Call')[['Strike', 'Call']], 'Call', '#3B82F6'), hide_index=True, use_container_width=True)
+            c2.dataframe(style_df(df_day_diff[df_day_diff['Put']>0].nlargest(10, 'Put')[['Strike', 'Put']], 'Put', '#F59E0B'), hide_index=True, use_container_width=True)
+            c3.dataframe(style_df(df_day_diff[df_day_diff['Total']>0].nlargest(10, 'Total')[['Strike', 'Total']], 'Total', '#10B981'), hide_index=True, use_container_width=True)
+
+            st.markdown("#### :material/trending_down: ลดลงมากที่สุด (Decrease)")
+            c1, c2, c3 = st.columns(3)
+            c1.dataframe(style_df(df_day_diff[df_day_diff['Call']<0].nsmallest(10, 'Call')[['Strike', 'Call']], 'Call', '#3B82F6'), hide_index=True, use_container_width=True)
+            c2.dataframe(style_df(df_day_diff[df_day_diff['Put']<0].nsmallest(10, 'Put')[['Strike', 'Put']], 'Put', '#F59E0B'), hide_index=True, use_container_width=True)
+            c3.dataframe(style_df(df_day_diff[df_day_diff['Total']<0].nsmallest(10, 'Total')[['Strike', 'Total']], 'Total', '#10B981'), hide_index=True, use_container_width=True)
 
 else:
     st.info("รอข้อมูลอัปเดตตั้งแต่เวลา 10:00 น. เป็นต้นไป", icon=":material/lightbulb:")
