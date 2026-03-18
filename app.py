@@ -189,10 +189,15 @@ def show_strike_history(strike_price, df_intra_all, df_oi_all):
     else:
         st.info("ไม่มีข้อมูลประวัติ Intraday สำหรับ Strike Price นี้")
 
+# ✅ 1. แก้ไข safe_max ป้องกัน RangeError
 def safe_max(series):
     try:
-        m = int(series.max())
-        return m if m > 0 else 1
+        if series.empty:
+            return 1
+        m = float(series.max())
+        if pd.isna(m) or m <= 0:
+            return 1
+        return int(m)
     except:
         return 1
 
@@ -445,7 +450,9 @@ if not df_intraday.empty:
                 hovertemplate="%{y:,.0f}",
                 selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
 
-        fig_intra.add_trace(go.Scatter(x=frame_data['Strike'], y=frame_data['Vol Settle'], name='Vol Settle', mode='lines+markers', 
+        # ✅ 2. แก้กราฟ Vol Settle ของ Intraday ป้องกันเส้นหักลง 0
+        vol_intra_y = [val if val > 0 else None for val in frame_data['Vol Settle']]
+        fig_intra.add_trace(go.Scatter(x=frame_data['Strike'], y=vol_intra_y, name='Vol Settle', mode='lines+markers', 
             line=dict(color='#EF4444', width=3, shape='spline'), marker=dict(size=6, color='#EF4444'),
             hovertemplate="%{y:.2f}",
             selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=True)
@@ -600,7 +607,9 @@ if not df_intraday.empty:
                     hovertemplate="%{y:,.0f}",
                     selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=False)
                 
-            fig_oi.add_trace(go.Scatter(x=latest_oi['Strike'], y=latest_oi['Vol Settle'], name='Vol Settle', mode='lines+markers', 
+            # ✅ 2. แก้กราฟ Vol Settle ของ OI ป้องกันเส้นหักลง 0
+            vol_oi_y = [val if val > 0 else None for val in latest_oi['Vol Settle']]
+            fig_oi.add_trace(go.Scatter(x=latest_oi['Strike'], y=vol_oi_y, name='Vol Settle', mode='lines+markers', 
                 line=dict(color='#EF4444', width=3, shape='spline'), marker=dict(size=6, color='#EF4444'),
                 hovertemplate="%{y:.2f}",
                 selected=dict(marker=dict(opacity=1)), unselected=dict(marker=dict(opacity=1))), secondary_y=True)
@@ -614,7 +623,7 @@ if not df_intraday.empty:
                 height=500,
                 paper_bgcolor='rgba(0,0,0,0)',
                 plot_bgcolor='rgba(0,0,0,0)',
-                clickmode="event+select",   # ✅ เพิ่มบรรทัดนี้
+                clickmode="event+select",
                 hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="center", x=0.5),
                 margin=dict(l=10, r=10, t=10, b=10)
