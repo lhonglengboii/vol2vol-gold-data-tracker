@@ -24,7 +24,7 @@ except:
 st.set_page_config(layout="wide", page_title="Vol2Vol Gold Data Tracker", page_icon=":abacus:")
 
 # ==========================================
-# Custom CSS + Mobile Responsive
+# Custom CSS
 # ==========================================
 st.markdown("""
 <style>
@@ -68,80 +68,40 @@ st.markdown("""
     [data-testid="stElementToolbar"], [data-testid="stDataFrameToolbar"] {
         display: none !important;
     }
-
-    /* 📱 การจัดเรียง UI เฉพาะบนมือถือ */
-    @media (max-width: 768px) {
-        /* ชุดแถว 3 คอลัมน์ (ดึงข้อมูลแถวบนขึ้นไป 100% แล้วเอา 2 อันหลังมาเรียงแนวนอน) */
-        div[data-testid="stElementContainer"]:has(.wrap-row) + div[data-testid="stHorizontalBlock"] {
-            flex-direction: row !important;
-            flex-wrap: wrap !important;
-            align-items: flex-end !important;
-            gap: 0.5rem !important;
-        }
-        div[data-testid="stElementContainer"]:has(.wrap-row) + div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(1) {
-            min-width: 100% !important;
-            order: 1;
-            margin-bottom: 5px;
-        }
-        div[data-testid="stElementContainer"]:has(.wrap-row) + div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(2) {
-            flex: 2 1 60% !important;
-            order: 2;
-        }
-        div[data-testid="stElementContainer"]:has(.wrap-row) + div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(3) {
-            flex: 1 1 30% !important;
-            order: 3;
-        }
-
-        /* ชุดปุ่ม Timeline + Back Play Next */
-        div[data-testid="stElementContainer"]:has(.playback-row) + div[data-testid="stHorizontalBlock"] {
-            flex-direction: column !important;
-        }
-        div[data-testid="stElementContainer"]:has(.playback-row) + div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(1) {
-            order: 2; /* ดึงชุดปุ่มลงมาข้างล่าง */
-            width: 100% !important;
-        }
-        div[data-testid="stElementContainer"]:has(.playback-row) + div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(2) {
-            order: 1; /* ดึงแถบ Timeline ขึ้นไปด้านบน */
-            width: 100% !important;
-            margin-bottom: -15px !important;
-        }
-        /* บังคับปุ่ม Back | Play | Next ให้เรียงแนวนอน */
-        div[data-testid="stElementContainer"]:has(.playback-row) + div[data-testid="stHorizontalBlock"] div[data-testid="stHorizontalBlock"] {
-            flex-direction: row !important;
-            flex-wrap: nowrap !important;
-            gap: 0.2rem !important;
-        }
-        div[data-testid="stElementContainer"]:has(.playback-row) + div[data-testid="stHorizontalBlock"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
-            width: auto !important;
-            flex: 1 1 0% !important;
-            min-width: 0 !important;
-        }
-    }
 </style>
 """, unsafe_allow_html=True)
 
 REPO = "pageth/Vol2VolData"
 
 # ==========================================
-# ฟังก์ชันตรวจสอบ Market Session (รองรับ DST)
+# Market Session (รองรับ DST)
 # ==========================================
 def get_market_session(dt_bkk):
     try:
         dt_utc = dt_bkk.tz_convert('UTC')
+        
         dt_ny = dt_utc.tz_convert('America/New_York')
         dt_lon = dt_utc.tz_convert('Europe/London')
         dt_tokyo = dt_utc.tz_convert('Asia/Tokyo')
+        dt_syd = dt_utc.tz_convert('Australia/Sydney')
         
         sessions = []
-        if 8 <= dt_tokyo.hour < 15:
+        
+        if 8 <= dt_syd.hour < 17:
+            sessions.append("Sydney")
+            
+        if 9 <= dt_tokyo.hour < 18:
             sessions.append("Tokyo")
-        if 8 <= dt_lon.hour < 16 or (dt_lon.hour == 16 and dt_lon.minute <= 30):
+            
+        if 8 <= dt_lon.hour < 17:
             sessions.append("London")
+            
         if 8 <= dt_ny.hour < 17:
             sessions.append("New York")
             
         if not sessions:
             return "After Hours"
+            
         return " & ".join(sessions)
     except Exception:
         return ""
@@ -430,6 +390,7 @@ def style_df(df, col, color_hex):
     except AttributeError:
         return df.style.applymap(lambda _: f'color: {color_hex}; font-weight: bold;', subset=[col])
 
+
 # ==========================================
 # Initialize Session State
 # ==========================================
@@ -448,10 +409,10 @@ if 'my_intraday_data' not in st.session_state:
     st.session_state.my_intraday_data = filter_session_data(raw_intra, "Intraday")
     st.session_state.my_oi_data = filter_session_data(raw_oi, "OI")
 
-
-# --- ชุดควบคุมส่วนบน (ตอบโจทย์ภาพที่ 1) ---
-st.markdown('<div class="wrap-row"></div>', unsafe_allow_html=True)
 col_spin, col_dropdown, col_refresh = st.columns([7, 2, 1.5])
+
+with col_dropdown:
+    chart_mode = st.selectbox("โหมดแสดงกราฟ", ["Call / Put Vol", "Total Vol"], label_visibility="collapsed")
 
 with col_spin:
     status_placeholder = st.empty()
@@ -460,9 +421,6 @@ with col_spin:
     if not df_intraday.empty:
         last_fetch = df_intraday['Datetime'].max().strftime("%H:%M:%S")
         status_placeholder.caption(f"⏱ ข้อมูลล่าสุด: **{last_fetch} น.**")
-
-with col_dropdown:
-    chart_mode = st.selectbox("โหมดแสดงกราฟ", ["Call / Put Vol", "Total Vol"], label_visibility="collapsed")
 
 with col_refresh:
     if st.button(":material/refresh: Refresh", use_container_width=True):
@@ -508,10 +466,6 @@ if not df_intraday.empty:
             frame_data['Vol Settle'] = (frame_data['Vol Settle'] * 100).round(2)
             
         h1_intra = frame_data['Header1'].iloc[0]
-        market_ses = session_map.get(time_val, "")
-        if market_ses:
-            h1_intra = f"{h1_intra} &nbsp;🌍 <span style='font-size: 0.9em; color:#888;'>({market_ses})</span>"
-            
         h2_intra = frame_data['Header2'].iloc[0]
         st.markdown(get_styled_header(h1_intra, h2_intra), unsafe_allow_html=True)
         
@@ -571,12 +525,10 @@ if not df_intraday.empty:
             show_strike_history(int(st.session_state.dialog_strike), df_intraday, df_oi)
             st.session_state.dialog_strike = None
         
-        # --- ชุดควบคุม Playback (ตอบโจทย์ภาพที่ 2) ---
-        st.markdown('<div class="playback-row"></div>', unsafe_allow_html=True)
         col_controls, col_slider = st.columns([1.5, 10])
-        
         with col_controls:
             c1, c2, c3 = st.columns(3)
+            
             try:
                 current_idx = list(available_times).index(st.session_state.selected_time_state)
             except ValueError:
@@ -589,6 +541,7 @@ if not df_intraday.empty:
                     st.session_state.selected_time_state = available_times[new_idx]
                     st.session_state.focus_slider = True
                     st.rerun()
+                    
             with c2:
                 if st.session_state.is_playing:
                     if st.button(":material/pause:", help="Pause", use_container_width=True):
@@ -604,6 +557,7 @@ if not df_intraday.empty:
                             st.session_state.anim_idx = current_idx
                         st.session_state.selected_time_state = available_times[st.session_state.anim_idx]
                         st.rerun()
+                        
             with c3:
                 if st.button(":material/skip_next:", help="Next", use_container_width=True):
                     st.session_state.is_playing = False
@@ -627,8 +581,6 @@ if not df_intraday.empty:
 
         st.markdown("---")
         
-        # --- ชุดค้นหา (ตอบโจทย์ภาพที่ 3) ---
-        st.markdown('<div class="wrap-row"></div>', unsafe_allow_html=True)
         col_tb_head, col_tb_search1, col_tb_search2 = st.columns([6, 2.5, 1.5])
         with col_tb_head:
             st.markdown("### :material/analytics: Intraday Volume Data")
@@ -762,7 +714,6 @@ if not df_intraday.empty:
 
             st.markdown("---")
             
-            st.markdown('<div class="wrap-row"></div>', unsafe_allow_html=True)
             col_tb_head_oi, col_tb_search1_oi, col_tb_search2_oi = st.columns([6, 2.5, 1.5])
             with col_tb_head_oi:
                 st.markdown("### :material/analytics: OI Volume Data")
