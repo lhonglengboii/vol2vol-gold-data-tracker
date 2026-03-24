@@ -785,25 +785,5 @@ if not df_intraday.empty:
                 c2.dataframe(style_df(df_oi_latest.nlargest(5, 'Put')[['Strike', 'Put']], 'Put', '#F59E0B'), hide_index=True, use_container_width=True)
                 c3.dataframe(style_df(df_oi_latest.nlargest(5, 'Total')[['Strike', 'Total']], 'Total', '#10B981'), hide_index=True, use_container_width=True)
 
-            st.markdown("---")
-            st.markdown("### :material/local_fire_department: Top Active Intraday Volume (การเปลี่ยนแปลงมากสุดตลอดวัน 10 อันดับ)")
-            
-            df_first_day = df_intraday.sort_values('Datetime').groupby('Strike').first()[['Call', 'Put']]
-            df_last_day = df_intraday.sort_values('Datetime').groupby('Strike').last()[['Call', 'Put']]
-            df_day_diff = (df_last_day - df_first_day).reset_index()
-            df_day_diff['Total'] = df_day_diff['Call'] + df_day_diff['Put']
-
-            st.markdown("#### :material/trending_up: เพิ่มขึ้นมากที่สุด (Increase)")
-            c1, c2, c3 = st.columns(3)
-            c1.dataframe(style_df(df_day_diff[df_day_diff['Call']>0].nlargest(10, 'Call')[['Strike', 'Call']], 'Call', '#3B82F6'), hide_index=True, use_container_width=True)
-            c2.dataframe(style_df(df_day_diff[df_day_diff['Put']>0].nlargest(10, 'Put')[['Strike', 'Put']], 'Put', '#F59E0B'), hide_index=True, use_container_width=True)
-            c3.dataframe(style_df(df_day_diff[df_day_diff['Total']>0].nlargest(10, 'Total')[['Strike', 'Total']], 'Total', '#10B981'), hide_index=True, use_container_width=True)
-
-            st.markdown("#### :material/trending_down: ลดลงมากที่สุด (Decrease)")
-            c1, c2, c3 = st.columns(3)
-            c1.dataframe(style_df(df_day_diff[df_day_diff['Call']<0].nsmallest(10, 'Call')[['Strike', 'Call']], 'Call', '#3B82F6'), hide_index=True, use_container_width=True)
-            c2.dataframe(style_df(df_day_diff[df_day_diff['Put']<0].nsmallest(10, 'Put')[['Strike', 'Put']], 'Put', '#F59E0B'), hide_index=True, use_container_width=True)
-            c3.dataframe(style_df(df_day_diff[df_day_diff['Total']<0].nsmallest(10, 'Total')[['Strike', 'Total']], 'Total', '#10B981'), hide_index=True, use_container_width=True)
-
 else:
     st.info("รอข้อมูลอัปเดตตั้งแต่เวลา 10:00 น. เป็นต้นไป", icon=":material/lightbulb:")
